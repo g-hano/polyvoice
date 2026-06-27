@@ -18,3 +18,21 @@ def setup_logging(level: int = logging.INFO) -> None:
     )
     root.addHandler(handler)
     root.setLevel(level)
+
+
+def suppress_hf_progress_bars() -> None:
+    """Disable HF/tqdm progress bars during model load.
+
+    On Windows, tqdm writing to a non-TTY stderr (common under uvicorn/Cursor)
+    raises OSError: [Errno 22] Invalid argument.
+    """
+    import os
+
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TQDM_DISABLE", "1")
+    try:
+        from transformers.utils.logging import disable_progress_bar
+
+        disable_progress_bar()
+    except Exception:
+        pass

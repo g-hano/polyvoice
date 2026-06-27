@@ -8,7 +8,7 @@ export interface SubtitleFontSettings {
 const STORAGE_KEY = "subtitle-font-settings";
 
 export const DEFAULT_SUBTITLE_FONTS: SubtitleFontSettings = {
-  sourceFontSize: 22,
+  sourceFontSize: 20,
   targetFontSize: 20,
 };
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..config import language_name, settings
+from ..logging_config import suppress_hf_progress_bars
 
 
 @dataclass
@@ -51,6 +52,7 @@ def _load_model(asr_model: str, aligner_model: str):
             return _model
         from qwen_asr import Qwen3ASRModel  # type: ignore
 
+        suppress_hf_progress_bars()
         dtype = _torch_dtype()
         _model = Qwen3ASRModel.from_pretrained(
             asr_model,

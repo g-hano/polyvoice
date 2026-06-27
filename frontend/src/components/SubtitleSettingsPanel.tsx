@@ -7,6 +7,7 @@ export default function SubtitleSettingsPanel({
   onReset,
   sourceLabel = "Spoken language",
   targetLabel = "Translation",
+  embedded = false,
 }: {
   settings: SubtitleFontSettings;
   onSourceChange: (px: number) => void;
@@ -14,15 +15,22 @@ export default function SubtitleSettingsPanel({
   onReset: () => void;
   sourceLabel?: string;
   targetLabel?: string;
+  /** When true, omit outer card chrome (used inside Advanced settings). */
+  embedded?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-panel/60 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white/90">Subtitle appearance</h3>
+    <div className={embedded ? "" : "rounded-xl border border-white/10 bg-panel/60 p-4"}>
+      <div className={`flex items-center justify-between ${embedded ? "mb-3" : "mb-3"}`}>
+        {!embedded && (
+          <h3 className="text-sm font-semibold text-white/90">Subtitle appearance</h3>
+        )}
+        {embedded && (
+          <p className="text-xs text-white/50">Adjust on-screen and transcript font sizes.</p>
+        )}
         <button
           type="button"
           onClick={onReset}
-          className="text-xs text-white/40 transition hover:text-white/70"
+          className="ml-auto text-xs text-white/40 transition hover:text-white/70"
         >
           Reset
         </button>

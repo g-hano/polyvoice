@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Cue } from "../types";
 import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
 import SubtitleOverlay from "./SubtitleOverlay";
-import SubtitleSettingsPanel from "./SubtitleSettingsPanel";
-import { useSubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
+import CollapsibleSection from "./CollapsibleSection";
 
 function findCueIndex(cues: Cue[], time: number): number {
   let lo = 0;
@@ -26,18 +25,15 @@ function findCueIndex(cues: Cue[], time: number): number {
 export default function Player({
   src,
   cues,
-  sourceLabel,
-  targetLabel,
+  fonts,
 }: {
   src: string;
   cues: Cue[];
-  sourceLabel?: string;
-  targetLabel?: string;
+  fonts: SubtitleFontSettings;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState(0);
   const rafRef = useRef<number>(0);
-  const { settings, setSourceFontSize, setTargetFontSize, reset } = useSubtitleFontSettings();
 
   useEffect(() => {
     const tick = () => {
@@ -52,17 +48,12 @@ export default function Player({
   const activeIndex = useMemo(() => findCueIndex(cues, time), [cues, time]);
   const activeCue = activeIndex >= 0 ? cues[activeIndex] : null;
 
+  const seek = (t: number) => {
+    if (videoRef.current) videoRef.current.currentTime = t;
+  };
+
   return (
     <div className="space-y-4">
-      <SubtitleSettingsPanel
-        settings={settings}
-        onSourceChange={setSourceFontSize}
-        onTargetChange={setTargetFontSize}
-        onReset={reset}
-        sourceLabel={sourceLabel}
-        targetLabel={targetLabel}
-      />
-
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
         <video ref={videoRef} src={src} controls className="block w-full" />
         {activeCue && (
@@ -70,19 +61,19 @@ export default function Player({
             source={activeCue.source}
             target={activeCue.target}
             time={time}
-            fonts={settings}
+            fonts={fonts}
           />
         )}
       </div>
 
-      <Transcript
-        cues={cues}
-        activeIndex={activeIndex}
-        fonts={settings}
-        onSeek={(t) => {
-          if (videoRef.current) videoRef.current.currentTime = t;
-        }}
-      />
+      <CollapsibleSection title="Subtitles & translation" defaultOpen>
+        <Transcript
+          cues={cues}
+          activeIndex={activeIndex}
+          fonts={fonts}
+          onSeek={seek}
+        />
+      </CollapsibleSection>
     </div>
   );
 }
@@ -106,28 +97,26 @@ function Transcript({
   }, [activeIndex]);
 
   return (
-    <div
-      ref={listRef}
-      className="max-h-72 space-y-1 overflow-y-auto rounded-2xl border border-white/10 bg-panel/60 p-3"
-    >
+    <div ref={listRef} className="max-h-80 space-y-4 overflow-y-auto pr-1">
       {cues.map((cue, i) => (
         <button
           key={cue.id}
+          type="button"
           data-idx={i}
           onClick={() => onSeek(cue.start)}
-          className={`block w-full rounded-lg px-3 py-2 text-left transition ${
-            i === activeIndex ? "bg-brand/20 ring-1 ring-brand/50" : "hover:bg-white/5"
+          className={`block w-full rounded-lg px-2 py-2 text-left transition ${
+            i === activeIndex ? "bg-brand/15 ring-1 ring-brand/40" : "hover:bg-white/5"
           }`}
         >
           <div
-            className="font-semibold text-white"
-            style={{ fontSize: Math.max(12, fonts.sourceFontSize - 4) }}
+            className="leading-snug text-white"
+            style={{ fontSize: fonts.sourceFontSize }}
           >
             {cue.source.text}
           </div>
           <div
-            className="italic text-emerald-200/90"
-            style={{ fontSize: Math.max(12, fonts.targetFontSize - 4) }}
+            className="mt-0.5 leading-snug text-emerald-200/90"
+            style={{ fontSize: fonts.targetFontSize }}
           >
             {cue.target.text}
           </div>

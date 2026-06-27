@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List
 
 from ..config import language_name, settings
+from ..logging_config import suppress_hf_progress_bars
 
 # TranslateGemma uses regional codes for some languages (e.g. de-DE, en-US).
 TRANSLATEGEMMA_LANG_CODES: dict[str, str] = {
@@ -69,6 +70,7 @@ class HelsinkiTranslator(Translator):
                 return self._pipes[key]
             from transformers import pipeline
 
+            suppress_hf_progress_bars()
             model = f"Helsinki-NLP/opus-mt-{src}-{tgt}"
             device = 0 if settings.device.startswith("cuda") else -1
             self._pipes[key] = pipeline("translation", model=model, device=device)
@@ -155,6 +157,7 @@ class _CausalLMTranslator(Translator):
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
+            suppress_hf_progress_bars()
             dtype = getattr(torch, settings.torch_dtype, torch.bfloat16)
             self._tokenizer = AutoTokenizer.from_pretrained(
                 self.model_path, trust_remote_code=True

@@ -5,19 +5,22 @@ import asyncio
 import logging
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from .config import ASR_MODELS, FORCED_ALIGNER_MODELS, LANGUAGE_NAMES, PipelineConfig, settings
 from .jobs import manager
-from .logging_config import setup_logging
-from .model_downloads import download_manager
+from .logging_config import setup_logging, suppress_hf_progress_bars
+from .model_downloads import download_manager, repos_for_job
 
 setup_logging()
+suppress_hf_progress_bars()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DualSub")
@@ -30,6 +33,26 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started = time.perf_counter()
+    logger.info("--> %s %s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("<-- %s %s failed", request.method, request.url.path)
+        raise
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "<-- %s %s %s (%.0f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     manager.bind_loop(asyncio.get_running_loop())
@@ -37,9 +60,43 @@ async def _startup() -> None:
     logger.info("DualSub API ready")
 
 
+@app.get("/api/health")
+def health() -> dict:
+    return {"ok": True}
+
+
 @app.get("/api/models")
 def list_models() -> dict:
     return {"models": download_manager.list_models()}
+
+
+class EnsureJobModelsRequest(BaseModel):
+    source_lang: str
+    target_lang: str
+    asr_model: str
+    forced_aligner_model: str
+    translator_backend: str
+    qc_enabled: bool = False
+
+
+@app.post("/api/models/ensure-for-job")
+def ensure_job_models(body: EnsureJobModelsRequest) -> dict:
+    repos = repos_for_job(
+        source_lang=body.source_lang,
+        target_lang=body.target_lang,
+        asr_model=body.asr_model,
+        forced_aligner_model=body.forced_aligner_model,
+        translator_backend=body.translator_backend,
+        qc_enabled=body.qc_enabled,
+    )
+    result = download_manager.ensure_repos(repos)
+    logger.info(
+        "Ensure job models: repos=%s started=%s waiting=%s",
+        repos,
+        result["started"],
+        result["waiting"],
+    )
+    return result
 
 
 @app.post("/api/models/{model_id}/download")
@@ -114,6 +171,15 @@ async def create_job(
     if not source_url and file is None:
         raise HTTPException(400, "Provide either source_url or an uploaded file.")
 
+    logger.info(
+        "Creating job: source_url=%s file=%s lang=%s->%s asr=%s",
+        source_url or "(none)",
+        file.filename if file else "(none)",
+        source_lang,
+        target_lang,
+        asr_model,
+    )
+
     config = PipelineConfig(
         source_lang=source_lang,
         target_lang=target_lang,
@@ -136,6 +202,7 @@ async def create_job(
         upload_path = Path(tmp.name)
 
     manager.start(job, upload_path=upload_path, upload_name=upload_name)
+    logger.info("Job %s started (status=%s)", job.id, job.status.value)
     return {"job_id": job.id, "status": job.status.value}
 
 

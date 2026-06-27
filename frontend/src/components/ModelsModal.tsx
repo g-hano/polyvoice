@@ -34,9 +34,11 @@ function formatBytes(bytes: number): string {
 export default function ModelsModal({
   open,
   onClose,
+  watchModelIds = [],
 }: {
   open: boolean;
   onClose: () => void;
+  watchModelIds?: string[];
 }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -59,6 +61,10 @@ export default function ModelsModal({
   useEffect(() => {
     if (open) refresh();
   }, [open, refresh]);
+
+  useEffect(() => {
+    if (open && watchModelIds.length > 0) refresh();
+  }, [open, watchModelIds, refresh]);
 
   useEffect(() => {
     if (!open) {
@@ -145,7 +151,12 @@ export default function ModelsModal({
         watchDownload(m.id);
       }
     }
-  }, [open, models, watchDownload]);
+    for (const id of watchModelIds) {
+      if (!unsubRef.current.has(id)) {
+        watchDownload(id);
+      }
+    }
+  }, [open, models, watchModelIds, watchDownload]);
 
   useEffect(() => {
     if (!open) return;

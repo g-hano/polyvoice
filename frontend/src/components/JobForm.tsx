@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { getAsrModels, getLanguages } from "../api";
 import type { AsrModelOption, CreateJobParams } from "../types";
+import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
+import CollapsibleSection from "./CollapsibleSection";
+import SubtitleSettingsPanel from "./SubtitleSettingsPanel";
 
 const BACKENDS = [
   { id: "helsinki", label: "Helsinki opus-mt (fast, recommended)" },
@@ -12,9 +15,17 @@ const BACKENDS = [
 export default function JobForm({
   onSubmit,
   busy,
+  fontSettings,
+  onSourceFontSize,
+  onTargetFontSize,
+  onFontReset,
 }: {
   onSubmit: (params: CreateJobParams) => void;
   busy: boolean;
+  fontSettings: SubtitleFontSettings;
+  onSourceFontSize: (px: number) => void;
+  onTargetFontSize: (px: number) => void;
+  onFontReset: () => void;
 }) {
   const [languages, setLanguages] = useState<Record<string, string>>({ sv: "Swedish", en: "English" });
   const [mode, setMode] = useState<"url" | "file">("url");
@@ -96,63 +107,77 @@ export default function JobForm({
         <Select label="Translate to" value={targetLang} onChange={setTargetLang} options={languages} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <RepoSelect
-          label="ASR model"
-          value={asrModel}
-          onChange={setAsrModel}
-          options={asrModels}
-        />
-        <RepoSelect
-          label="Forced aligner"
-          value={forcedAlignerModel}
-          onChange={setForcedAlignerModel}
-          options={alignerModels}
-        />
-      </div>
-
-      <div>
-        <Label>Translation engine</Label>
-        <select
-          value={translatorBackend}
-          onChange={(e) => setTranslatorBackend(e.target.value)}
-          className="w-full rounded-lg border border-white/10 bg-ink px-4 py-2.5 outline-none focus:border-brand"
-        >
-          {BACKENDS.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="rounded-xl border border-white/10 bg-ink/60 p-4">
-        <label className="flex cursor-pointer items-center gap-3">
-          <input
-            type="checkbox"
-            checked={qcEnabled}
-            onChange={(e) => setQcEnabled(e.target.checked)}
-            className="h-4 w-4 accent-brand"
+      <CollapsibleSection title="Advanced settings">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <RepoSelect
+            label="ASR model"
+            value={asrModel}
+            onChange={setAsrModel}
+            options={asrModels}
           />
-          <span className="font-medium">Quality control (back-translate + LM Studio fix)</span>
-        </label>
-        {qcEnabled && (
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <RepoSelect
+            label="Forced aligner"
+            value={forcedAlignerModel}
+            onChange={setForcedAlignerModel}
+            options={alignerModels}
+          />
+        </div>
+
+        <div>
+          <Label>Translation engine</Label>
+          <select
+            value={translatorBackend}
+            onChange={(e) => setTranslatorBackend(e.target.value)}
+            className="w-full rounded-lg border border-white/10 bg-ink px-4 py-2.5 outline-none focus:border-brand"
+          >
+            {BACKENDS.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-ink/60 p-4">
+          <label className="flex cursor-pointer items-center gap-3">
             <input
-              value={lmstudioUrl}
-              onChange={(e) => setLmstudioUrl(e.target.value)}
-              placeholder="LM Studio URL"
-              className="rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
+              type="checkbox"
+              checked={qcEnabled}
+              onChange={(e) => setQcEnabled(e.target.checked)}
+              className="h-4 w-4 accent-brand"
             />
-            <input
-              value={lmstudioModel}
-              onChange={(e) => setLmstudioModel(e.target.value)}
-              placeholder="Model name"
-              className="rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
-            />
-          </div>
-        )}
-      </div>
+            <span className="font-medium">Quality control (back-translate + LM Studio fix)</span>
+          </label>
+          {qcEnabled && (
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <input
+                value={lmstudioUrl}
+                onChange={(e) => setLmstudioUrl(e.target.value)}
+                placeholder="LM Studio URL"
+                className="rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+              <input
+                value={lmstudioModel}
+                onChange={(e) => setLmstudioModel(e.target.value)}
+                placeholder="Model name"
+                className="rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-white/10 pt-4">
+          <SubtitleSettingsPanel
+            settings={fontSettings}
+            onSourceChange={onSourceFontSize}
+            onTargetChange={onTargetFontSize}
+            onReset={onFontReset}
+            sourceLabel={languages[sourceLang] ?? sourceLang}
+            targetLabel={languages[targetLang] ?? targetLang}
+            embedded
+          />
+        </div>
+      </CollapsibleSection>
 
       <button
         type="submit"

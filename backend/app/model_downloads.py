@@ -110,6 +110,33 @@ MODEL_REGISTRY: List[ModelEntry] = [
 ]
 
 _REGISTRY_BY_ID = {m.id: m for m in MODEL_REGISTRY}
+_REGISTRY_BY_REPO = {m.repo_id: m for m in MODEL_REGISTRY}
+
+TRANSLATOR_REPOS = {
+    "hunyuan": "tencent/Hy-MT2-1.8B",
+    "translategemma": "google/translategemma-4b-it",
+}
+
+
+def repos_for_job(
+    *,
+    source_lang: str,
+    target_lang: str,
+    asr_model: str,
+    forced_aligner_model: str,
+    translator_backend: str,
+    qc_enabled: bool,
+) -> List[str]:
+    """Return Hugging Face repo ids required for a pipeline job."""
+    repos = [asr_model, forced_aligner_model]
+    if translator_backend == "helsinki":
+        repos.append(f"Helsinki-NLP/opus-mt-{source_lang}-{target_lang}")
+        if qc_enabled:
+            repos.append(f"Helsinki-NLP/opus-mt-{target_lang}-{source_lang}")
+    elif translator_backend in TRANSLATOR_REPOS:
+        repos.append(TRANSLATOR_REPOS[translator_backend])
+    # Preserve order, drop duplicates.
+    return list(dict.fromkeys(repos))
 
 
 @dataclass
@@ -168,24 +195,44 @@ class ModelDownloadManager:
         self._subscribers: Dict[str, List[asyncio.Queue]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = threading.Lock()
+        self._extras: Dict[str, ModelEntry] = {}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
     def _entry(self, model_id: str) -> ModelEntry:
-        if model_id not in _REGISTRY_BY_ID:
-            raise KeyError(f"Unknown model: {model_id}")
-        return _REGISTRY_BY_ID[model_id]
+        if model_id in _REGISTRY_BY_ID:
+            return _REGISTRY_BY_ID[model_id]
+        if model_id in self._extras:
+            return self._extras[model_id]
+        raise KeyError(f"Unknown model: {model_id}")
+
+    def _get_or_create_entry(self, repo_id: str) -> ModelEntry:
+        if repo_id in _REGISTRY_BY_REPO:
+            return _REGISTRY_BY_REPO[repo_id]
+        model_id = f"repo:{repo_id.replace('/', '__')}"
+        if model_id not in self._extras:
+            if "ASR" in repo_id or "Aligner" in repo_id or "aligner" in repo_id.lower():
+                category = ModelCategory.asr
+            else:
+                category = ModelCategory.translation
+            self._extras[model_id] = ModelEntry(
+                id=model_id,
+                repo_id=repo_id,
+                label=repo_id.split("/")[-1],
+                category=category,
+                description="Auto-downloaded for the current job.",
+            )
+        return self._extras[model_id]
 
     def _state(self, model_id: str) -> DownloadState:
         if model_id not in self._states:
             self._states[model_id] = DownloadState()
         return self._states[model_id]
 
-    def _refresh_cached(self, model_id: str) -> DownloadState:
-        entry = self._entry(model_id)
-        state = self._state(model_id)
-        if model_id in self._active:
+    def _refresh_cached_entry(self, entry: ModelEntry) -> DownloadState:
+        state = self._state(entry.id)
+        if entry.id in self._active:
             return state
         size = _cache_size_bytes(entry.repo_id)
         state.size_on_disk = size
@@ -200,26 +247,57 @@ class ModelDownloadManager:
             state.message = ""
         return state
 
+    def _refresh_cached(self, model_id: str) -> DownloadState:
+        return self._refresh_cached_entry(self._entry(model_id))
+
+    def _entry_to_dict(self, entry: ModelEntry, state: DownloadState) -> dict:
+        return {
+            "id": entry.id,
+            "repo_id": entry.repo_id,
+            "label": entry.label,
+            "category": entry.category.value,
+            "description": entry.description,
+            "required": entry.required,
+            "status": state.status.value,
+            "progress": round(state.progress, 3),
+            "message": state.message,
+            "error": state.error,
+            "size_on_disk": state.size_on_disk,
+        }
+
     def list_models(self) -> List[dict]:
         out: List[dict] = []
-        for entry in MODEL_REGISTRY:
-            state = self._refresh_cached(entry.id)
-            out.append(
-                {
-                    "id": entry.id,
-                    "repo_id": entry.repo_id,
-                    "label": entry.label,
-                    "category": entry.category.value,
-                    "description": entry.description,
-                    "required": entry.required,
-                    "status": state.status.value,
-                    "progress": round(state.progress, 3),
-                    "message": state.message,
-                    "error": state.error,
-                    "size_on_disk": state.size_on_disk,
-                }
-            )
+        seen: set[str] = set()
+        for entry in list(MODEL_REGISTRY) + list(self._extras.values()):
+            if entry.id in seen:
+                continue
+            seen.add(entry.id)
+            state = self._refresh_cached_entry(entry)
+            out.append(self._entry_to_dict(entry, state))
         return out
+
+    def ensure_repos(self, repo_ids: List[str]) -> dict:
+        """Start downloads for any uncached repos; return tracking ids."""
+        started: List[str] = []
+        waiting: List[str] = []
+        ready: List[str] = []
+        for repo_id in repo_ids:
+            entry = self._get_or_create_entry(repo_id)
+            state = self._refresh_cached_entry(entry)
+            if state.status == DownloadStatus.downloaded:
+                ready.append(entry.id)
+            elif state.status == DownloadStatus.downloading:
+                waiting.append(entry.id)
+            else:
+                self.start_download(entry.id)
+                started.append(entry.id)
+        pending = started + waiting
+        return {
+            "started": started,
+            "waiting": waiting,
+            "ready": ready,
+            "pending": pending,
+        }
 
     def subscribe(self, model_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()

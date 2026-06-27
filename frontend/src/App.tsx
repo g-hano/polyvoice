@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  checkBackendHealth,
   createJob,
+  ensureJobModels,
   exportDownloadUrl,
   getCues,
   mediaUrl,
   requestExport,
   subscribeProgress,
+  waitForModelDownloads,
 } from "./api";
+import { useSubtitleFontSettings } from "./hooks/useSubtitleFontSettings";
 import JobForm from "./components/JobForm";
 import ModelsModal from "./components/ModelsModal";
 import Player from "./components/Player";
@@ -33,32 +37,52 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
-  const [subtitleLabels, setSubtitleLabels] = useState({
-    source: "Spoken language",
-    target: "Translation",
-  });
+  const [modelsWatchIds, setModelsWatchIds] = useState<string[]>([]);
+  const [modelPrepMessage, setModelPrepMessage] = useState<string | null>(null);
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  const {
+    settings: fontSettings,
+    setSourceFontSize,
+    setTargetFontSize,
+    reset: resetFonts,
+  } = useSubtitleFontSettings();
 
   const busy =
-    !!jobId && progress?.status !== "done" && progress?.status !== "error";
+    !!modelPrepMessage ||
+    (!!jobId && progress?.status !== "done" && progress?.status !== "error");
 
   const handleSubmit = useCallback(async (params: CreateJobParams) => {
     setError(null);
     setCues(null);
     setProgress(null);
     setExportReady(false);
-    setSubtitleLabels({
-      source: `Spoken (${params.sourceLang.toUpperCase()})`,
-      target: `Translation (${params.targetLang.toUpperCase()})`,
-    });
     try {
+      const ensure = await ensureJobModels(params);
+      if (ensure.pending.length > 0) {
+        setModelsWatchIds(ensure.pending);
+        setModelsOpen(true);
+        setModelPrepMessage(
+          ensure.started.length > 0
+            ? `Downloading ${ensure.pending.length} required model(s)…`
+            : `Waiting for ${ensure.pending.length} model download(s)…`
+        );
+        await waitForModelDownloads(ensure.pending);
+        setModelPrepMessage(null);
+      }
+
       const { job_id } = await createJob(params);
       setJobId(job_id);
       unsubRef.current?.();
       unsubRef.current = subscribeProgress(job_id, (e) => setProgress(e));
     } catch (err) {
+      setModelPrepMessage(null);
       setError((err as Error).message);
     }
+  }, []);
+
+  useEffect(() => {
+    checkBackendHealth().then(setBackendOk);
   }, []);
 
   useEffect(() => {
@@ -107,11 +131,37 @@ export default function App() {
         </button>
       </header>
 
-      <ModelsModal open={modelsOpen} onClose={() => setModelsOpen(false)} />
+      <ModelsModal
+        open={modelsOpen}
+        watchModelIds={modelsWatchIds}
+        onClose={() => setModelsOpen(false)}
+      />
+
+      {backendOk === false && (
+        <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Backend not reachable. Start it with{" "}
+          <code className="rounded bg-black/30 px-1.5 py-0.5 text-xs">
+            cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+          </code>{" "}
+          and use the frontend at <strong>http://localhost:5173</strong> (not port 8000).
+        </div>
+      )}
 
       <div className="grid gap-8 lg:grid-cols-[420px_1fr]">
         <div className="space-y-4">
-          <JobForm onSubmit={handleSubmit} busy={busy} />
+          <JobForm
+            onSubmit={handleSubmit}
+            busy={busy}
+            fontSettings={fontSettings}
+            onSourceFontSize={setSourceFontSize}
+            onTargetFontSize={setTargetFontSize}
+            onFontReset={resetFonts}
+          />
+          {modelPrepMessage && (
+            <div className="rounded-xl border border-brand/40 bg-brand/10 px-4 py-3 text-sm text-brand">
+              {modelPrepMessage}
+            </div>
+          )}
           {error && (
             <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
               {error}
@@ -126,12 +176,7 @@ export default function App() {
 
           {cues && jobId ? (
             <>
-              <Player
-                src={mediaUrl(jobId)}
-                cues={cues}
-                sourceLabel={subtitleLabels.source}
-                targetLabel={subtitleLabels.target}
-              />
+              <Player src={mediaUrl(jobId)} cues={cues} fonts={fontSettings} />
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleExport}
