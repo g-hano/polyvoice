@@ -91,7 +91,7 @@ export default function App() {
       <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight md:text-4xl">
-            Dual Subtitle Studio
+            DualSub
           </h1>
           <p className="mt-2 text-white/60">
             Transcribe, translate, and watch with both languages and live word

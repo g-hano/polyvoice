@@ -1,4 +1,4 @@
-# KaraokeSub Studio
+# DualSub
 
 **Local dual-subtitle pipeline for video and audio.** Transcribe speech with Qwen3-ASR, translate with Helsinki-NLP (or optional LLM backends), optionally refine translations via LM Studio, and play the result in a web player with **two subtitle tracks** and **live word-by-word karaoke highlighting**. Export a burned-in MP4 when you are done.
 

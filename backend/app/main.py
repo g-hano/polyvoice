@@ -20,7 +20,7 @@ from .model_downloads import download_manager
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Dual Subtitle Pipeline")
+app = FastAPI(title="DualSub")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,7 @@ app.add_middleware(
 async def _startup() -> None:
     manager.bind_loop(asyncio.get_running_loop())
     download_manager.bind_loop(asyncio.get_running_loop())
-    logger.info("Dual Subtitle Pipeline API ready")
+    logger.info("DualSub API ready")
 
 
 @app.get("/api/models")
