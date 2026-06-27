@@ -70,8 +70,8 @@ The spoken language receives real word timings. Translated-line timings are appr
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/karaokesub-studio.git
-cd karaokesub-studio
+git clone https://github.com/YOUR_USERNAME/dualsub.git
+cd dualsub
 ```
 
 ### 2. Backend
@@ -160,7 +160,7 @@ For QC, LM Studio's native chat API is used (`POST /api/v1/chat`). A small model
 ## Project structure
 
 ```
-karaokesub-studio/
+dualsub/
 ├── backend/
 │   ├── app/              # FastAPI app, pipeline, job manager
 │   ├── pyproject.toml
