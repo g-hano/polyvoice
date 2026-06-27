@@ -23,6 +23,16 @@ Supported language pairs depend on the ASR model and available Helsinki directio
 
 ---
 
+## Example Output + UI
+
+![UI](assets/UI.png)
+
+https://github.com/user-attachments/assets/3b2deb8f-3903-41ce-b451-d06bd67da0cd
+
+<sub><i>Original video on YouTube: https://www.youtube.com/watch?v=YsJCXFOgvMM</i></sub>
+
+
+
 ## Architecture
 
 ```
