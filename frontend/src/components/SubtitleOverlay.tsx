@@ -1,18 +1,36 @@
-import type { Line } from "../types";
-import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
+import type { Line, SubtitleStyleSettings, TrackStyle } from "../types";
 
-function WordLine({ line, time }: { line: Line; time: number }) {
+function WordLine({
+  line,
+  time,
+  track,
+}: {
+  line: Line;
+  time: number;
+  track: TrackStyle;
+}) {
   if (!line.words || line.words.length === 0) {
     return <span>{line.text}</span>;
   }
   return (
     <>
       {line.words.map((word, i) => {
-        let cls = "word";
-        if (time >= word.start && time < word.end) cls += " word-active";
-        else if (time >= word.end) cls += " word-done";
+        const active = time >= word.start && time < word.end;
+        const done = time >= word.end;
+        const color = active
+          ? track.karaoke_active_color
+          : done
+            ? track.karaoke_done_color
+            : track.color;
         return (
-          <span key={i} className={cls}>
+          <span
+            key={i}
+            className="word"
+            style={{
+              color,
+              textShadow: active ? `0 0 14px ${track.karaoke_active_color}88` : undefined,
+            }}
+          >
             {word.w}
             {i < line.words.length - 1 ? " " : ""}
           </span>
@@ -22,31 +40,47 @@ function WordLine({ line, time }: { line: Line; time: number }) {
   );
 }
 
+function TrackLine({
+  line,
+  time,
+  track,
+}: {
+  line: Line;
+  time: number;
+  track: TrackStyle;
+}) {
+  return (
+    <div
+      className="max-w-4xl rounded-xl px-5 py-2 leading-snug backdrop-blur-sm"
+      style={{
+        fontSize: track.font_size,
+        fontFamily: track.font_family,
+        color: track.color,
+        fontWeight: track.bold ? 700 : 400,
+        fontStyle: track.italic ? "italic" : "normal",
+        backgroundColor: `rgba(0,0,0,${track.background_opacity})`,
+      }}
+    >
+      <WordLine line={line} time={time} track={track} />
+    </div>
+  );
+}
+
 export default function SubtitleOverlay({
   source,
   target,
   time,
-  fonts,
+  style,
 }: {
   source: Line;
   target: Line;
   time: number;
-  fonts: SubtitleFontSettings;
+  style: SubtitleStyleSettings;
 }) {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 px-6 pb-8 text-center">
-      <div
-        className="max-w-4xl rounded-xl bg-black/55 px-5 py-2 font-semibold leading-snug text-white backdrop-blur-sm"
-        style={{ fontSize: fonts.sourceFontSize }}
-      >
-        <WordLine line={source} time={time} />
-      </div>
-      <div
-        className="max-w-4xl rounded-xl bg-black/45 px-5 py-1.5 font-medium italic leading-snug text-emerald-200 backdrop-blur-sm"
-        style={{ fontSize: fonts.targetFontSize }}
-      >
-        <WordLine line={target} time={time} />
-      </div>
+      <TrackLine line={source} time={time} track={style.source} />
+      <TrackLine line={target} time={time} track={style.target} />
     </div>
   );
 }

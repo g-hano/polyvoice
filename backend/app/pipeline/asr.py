@@ -1,7 +1,8 @@
-"""Speech recognition with two selectable engines:
+"""Speech recognition with selectable engines:
 
   - Qwen3-ASR plus word-level timestamps via the Qwen3-ForcedAligner companion.
   - Whisper (via the transformers ASR pipeline) with built-in word timestamps.
+  - Nemotron 3.5 ASR (via transformers AutoModelForRNNT) with token timestamps.
 
 Models are loaded lazily and cached process-wide because they are large, and
 can be released from the GPU via :func:`unload` before the translation stage.
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from ..config import language_name, settings
+from ..config import language_name, nemotron_locale, settings
 from ..logging_config import suppress_hf_progress_bars
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class AsrResult:
 
 _model = None
 _whisper = None
+_nemotron = None
 _model_lock = threading.Lock()
 
 
@@ -98,17 +100,35 @@ def _load_whisper_model(whisper_model: str):
         return _whisper
 
 
-def unload() -> None:
-    """Release cached ASR models from GPU/CPU memory.
-
-    Called before the translation stage so the ASR model frees its VRAM before
-    the translator loads.
-    """
-    global _model, _whisper
+def _load_nemotron_model(nemotron_model: str):
+    """Load and cache Nemotron ASR model + processor."""
+    global _nemotron
+    if _nemotron is not None:
+        return _nemotron
     with _model_lock:
-        had_model = _model is not None or _whisper is not None
+        if _nemotron is not None:
+            return _nemotron
+        from transformers import AutoModelForRNNT, AutoProcessor
+
+        suppress_hf_progress_bars()
+        processor = AutoProcessor.from_pretrained(nemotron_model)
+        model = AutoModelForRNNT.from_pretrained(
+            nemotron_model,
+            dtype=_torch_dtype(),
+            device_map="auto",
+        )
+        _nemotron = (processor, model)
+        return _nemotron
+
+
+def unload() -> None:
+    """Release cached ASR models from GPU/CPU memory."""
+    global _model, _whisper, _nemotron
+    with _model_lock:
+        had_model = _model is not None or _whisper is not None or _nemotron is not None
         _model = None
         _whisper = None
+        _nemotron = None
     if not had_model:
         return
     gc.collect()
@@ -146,8 +166,11 @@ def transcribe(wav_path: Path, source_lang: str, config) -> AsrResult:
     if settings.mock_models:
         return _mock_transcribe(wav_path, source_lang)
 
-    if getattr(config, "asr_engine", "qwen") == "whisper":
+    engine = getattr(config, "asr_engine", "qwen")
+    if engine == "whisper":
         return _transcribe_whisper(wav_path, source_lang, config)
+    if engine == "nemotron":
+        return _transcribe_nemotron(wav_path, source_lang, config)
     return _transcribe_qwen(wav_path, source_lang, config)
 
 
@@ -194,11 +217,122 @@ def _coerce_whisper_chunks(chunks) -> List[AsrWord]:
         token = str(text).strip()
         if not token:
             continue
-        # Whisper occasionally omits a closing timestamp on the final word.
         if end is None:
             end = start
         words.append(AsrWord(w=token, start=float(start), end=float(end)))
     return words
+
+
+def _tokens_to_words(token_timestamps: list[dict]) -> List[AsrWord]:
+    """Merge Nemotron token-level timestamps into word-level AsrWords."""
+    words: List[AsrWord] = []
+    current_tokens: list[str] = []
+    word_start: float | None = None
+    word_end: float | None = None
+
+    def flush() -> None:
+        nonlocal current_tokens, word_start, word_end
+        if not current_tokens or word_start is None or word_end is None:
+            current_tokens = []
+            word_start = None
+            word_end = None
+            return
+        text = "".join(current_tokens).strip()
+        if text:
+            words.append(AsrWord(w=text, start=round(word_start, 3), end=round(word_end, 3)))
+        current_tokens = []
+        word_start = None
+        word_end = None
+
+    for entry in token_timestamps:
+        token = str(entry.get("token", ""))
+        start = float(entry.get("start", 0))
+        end = float(entry.get("end", start))
+        if not token:
+            continue
+        if token.isspace():
+            flush()
+            continue
+        if word_start is None:
+            word_start = start
+        word_end = end
+        current_tokens.append(token)
+        if token.endswith((" ", ".", "!", "?", ",", ";", ":")):
+            flush()
+    flush()
+    return words
+
+
+def _approx_words_from_text(text: str, duration: float) -> List[AsrWord]:
+    """Fallback: distribute words evenly across audio duration."""
+    tokens = [t for t in text.split() if t]
+    if not tokens or duration <= 0:
+        return []
+    span = max(duration, 0.001)
+    step = span / len(tokens)
+    words: List[AsrWord] = []
+    t = 0.0
+    for tok in tokens:
+        words.append(AsrWord(w=tok, start=round(t, 3), end=round(t + step, 3)))
+        t += step
+    if words:
+        words[-1].end = round(duration, 3)
+    return words
+
+
+def _audio_duration(wav_path: Path) -> float:
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(wav_path))
+        return float(info.duration)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _transcribe_nemotron(wav_path: Path, source_lang: str, config) -> AsrResult:
+    from transformers.audio_utils import load_audio
+
+    processor, model = _load_nemotron_model(config.nemotron_model)
+    locale = nemotron_locale(source_lang)
+
+    sampling_rate = processor.feature_extractor.sampling_rate
+    audio = load_audio(str(wav_path), sampling_rate=sampling_rate)
+
+    proc_kwargs: dict = {
+        "sampling_rate": sampling_rate,
+    }
+    if locale and locale != "auto":
+        proc_kwargs["language"] = locale
+    elif locale == "auto":
+        proc_kwargs["language"] = "auto"
+
+    inputs = processor(audio, **proc_kwargs)
+    inputs = inputs.to(model.device, dtype=model.dtype)
+
+    output = model.generate(**inputs, return_dict_in_generate=True)
+    sequences = output.sequences
+
+    text = ""
+    words: List[AsrWord] = []
+    durations = getattr(output, "durations", None)
+
+    if durations is not None:
+        decoded = processor.decode(sequences, durations=durations, skip_special_tokens=True)
+        if isinstance(decoded, tuple):
+            text, proc_timestamps = decoded
+            if proc_timestamps and len(proc_timestamps) > 0:
+                words = _tokens_to_words(proc_timestamps[0])
+        else:
+            text = decoded
+    else:
+        text = processor.decode(sequences, skip_special_tokens=True)
+
+    text = str(text).strip()
+    if not words and text:
+        words = _approx_words_from_text(text, _audio_duration(wav_path))
+
+    return AsrResult(language=locale if locale != "auto" else None, text=text, words=words)
 
 
 def _mock_transcribe(wav_path: Path, source_lang: str) -> AsrResult:

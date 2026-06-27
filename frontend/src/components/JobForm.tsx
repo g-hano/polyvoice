@@ -1,35 +1,29 @@
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { getAsrModels, getLanguages } from "../api";
-import type { AsrEngine, AsrModelOption, CreateJobParams } from "../types";
+import { getAsrModels, getLanguages, getTranslationModels } from "../api";
+import type { AsrEngine, AsrModelOption, JobFormSubmitParams } from "../types";
+import CollapsibleSection from "./CollapsibleSection";
 
 const CUSTOM_WHISPER = "__custom__";
-import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
-import CollapsibleSection from "./CollapsibleSection";
-import SubtitleSettingsPanel from "./SubtitleSettingsPanel";
 
 const BACKENDS = [
   { id: "helsinki", label: "Helsinki opus-mt (fast, recommended)" },
-  { id: "hunyuan", label: "Hunyuan Hy-MT2-1.8B" },
+  { id: "nllb", label: "NLLB-200 (multilingual)" },
+  { id: "hunyuan", label: "Hunyuan (HY-MT1.5 / Hy-MT2)" },
   { id: "translategemma", label: "TranslateGemma 4B" },
 ];
 
 export default function JobForm({
   onSubmit,
   busy,
-  fontSettings,
-  onSourceFontSize,
-  onTargetFontSize,
-  onFontReset,
 }: {
-  onSubmit: (params: CreateJobParams) => void;
+  onSubmit: (params: JobFormSubmitParams) => void;
   busy: boolean;
-  fontSettings: SubtitleFontSettings;
-  onSourceFontSize: (px: number) => void;
-  onTargetFontSize: (px: number) => void;
-  onFontReset: () => void;
 }) {
   const [languages, setLanguages] = useState<Record<string, string>>({ sv: "Swedish", en: "English" });
+  const [nemotronByIso, setNemotronByIso] = useState<
+    Record<string, { locale: string; tier: string | null }>
+  >({});
   const [mode, setMode] = useState<"url" | "file">("url");
   const [sourceUrl, setSourceUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -44,26 +38,42 @@ export default function JobForm({
   const [asrModel, setAsrModel] = useState("Qwen/Qwen3-ASR-1.7B");
   const [forcedAlignerModel, setForcedAlignerModel] = useState("Qwen/Qwen3-ForcedAligner-0.6B");
   const [asrEngine, setAsrEngine] = useState<AsrEngine>("qwen");
-  const [whisperModels, setWhisperModels] = useState<AsrModelOption[]>([
-    { repo_id: "openai/whisper-small", label: "Whisper Small" },
-    { repo_id: "openai/whisper-medium", label: "Whisper Medium" },
-    { repo_id: "openai/whisper-large-v3", label: "Whisper Large v3" },
+  const [whisperModels, setWhisperModels] = useState<AsrModelOption[]>([]);
+  const [nemotronModels, setNemotronModels] = useState<AsrModelOption[]>([
+    { repo_id: "nvidia/nemotron-3.5-asr-streaming-0.6b", label: "Nemotron 3.5 ASR 0.6B" },
   ]);
+  const [nemotronModel, setNemotronModel] = useState("nvidia/nemotron-3.5-asr-streaming-0.6b");
   const [whisperPreset, setWhisperPreset] = useState("openai/whisper-large-v3");
   const [whisperCustom, setWhisperCustom] = useState("");
   const [translatorBackend, setTranslatorBackend] = useState("helsinki");
+  const [nllbModels, setNllbModels] = useState<AsrModelOption[]>([]);
+  const [nllbModel, setNllbModel] = useState("facebook/nllb-200-distilled-600M");
+  const [hunyuanModels, setHunyuanModels] = useState<AsrModelOption[]>([]);
+  const [hunyuanModel, setHunyuanModel] = useState("tencent/HY-MT1.5-1.8B");
   const [translateBatchSize, setTranslateBatchSize] = useState(16);
   const [qcEnabled, setQcEnabled] = useState(false);
   const [lmstudioUrl, setLmstudioUrl] = useState("http://localhost:1234/v1");
   const [lmstudioModel, setLmstudioModel] = useState("local-model");
 
   useEffect(() => {
-    getLanguages().then(setLanguages).catch(() => undefined);
+    getLanguages()
+      .then((data) => {
+        setLanguages(data.languages);
+        if (data.nemotron_by_iso) setNemotronByIso(data.nemotron_by_iso);
+      })
+      .catch(() => undefined);
     getAsrModels()
       .then((data) => {
         setAsrModels(data.asr_models);
         setAlignerModels(data.forced_aligner_models);
         if (data.whisper_models?.length) setWhisperModels(data.whisper_models);
+        if (data.nemotron_models?.length) setNemotronModels(data.nemotron_models);
+      })
+      .catch(() => undefined);
+    getTranslationModels()
+      .then((data) => {
+        if (data.nllb_models?.length) setNllbModels(data.nllb_models);
+        if (data.hunyuan_models?.length) setHunyuanModels(data.hunyuan_models);
       })
       .catch(() => undefined);
   }, []);
@@ -82,7 +92,10 @@ export default function JobForm({
       asrModel,
       forcedAlignerModel,
       whisperModel: asrEngine === "whisper" ? whisperModel : "openai/whisper-large-v3",
+      nemotronModel: asrEngine === "nemotron" ? nemotronModel : "nvidia/nemotron-3.5-asr-streaming-0.6b",
       translatorBackend,
+      nllbModel,
+      hunyuanModel,
       translateBatchSize,
       qcEnabled,
       lmstudioUrl,
@@ -93,6 +106,7 @@ export default function JobForm({
   const hasSource = mode === "url" ? sourceUrl.trim().length > 0 : !!file;
   const whisperValid = asrEngine !== "whisper" || whisperModel.length > 0;
   const canSubmit = hasSource && whisperValid;
+  const nemotronInfo = asrEngine === "nemotron" ? nemotronByIso[sourceLang] : null;
 
   return (
     <form onSubmit={submit} className="space-y-5 rounded-2xl border border-white/10 bg-panel/60 p-6">
@@ -130,24 +144,22 @@ export default function JobForm({
       <CollapsibleSection title="Advanced settings">
         <div>
           <Label>ASR engine</Label>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <TabButton active={asrEngine === "qwen"} onClick={() => setAsrEngine("qwen")}>
               Qwen3-ASR
             </TabButton>
             <TabButton active={asrEngine === "whisper"} onClick={() => setAsrEngine("whisper")}>
               Whisper
             </TabButton>
+            <TabButton active={asrEngine === "nemotron"} onClick={() => setAsrEngine("nemotron")}>
+              Nemotron 3.5
+            </TabButton>
           </div>
         </div>
 
-        {asrEngine === "qwen" ? (
+        {asrEngine === "qwen" && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <RepoSelect
-              label="ASR model"
-              value={asrModel}
-              onChange={setAsrModel}
-              options={asrModels}
-            />
+            <RepoSelect label="ASR model" value={asrModel} onChange={setAsrModel} options={asrModels} />
             <RepoSelect
               label="Forced aligner"
               value={forcedAlignerModel}
@@ -155,7 +167,9 @@ export default function JobForm({
               options={alignerModels}
             />
           </div>
-        ) : (
+        )}
+
+        {asrEngine === "whisper" && (
           <div className="space-y-3">
             <div>
               <Label>Whisper model</Label>
@@ -176,9 +190,26 @@ export default function JobForm({
               <input
                 value={whisperCustom}
                 onChange={(e) => setWhisperCustom(e.target.value)}
-                placeholder="e.g. openai/whisper-large-v3"
+                placeholder="e.g. openai/whisper-large-v3-turbo"
                 className="w-full rounded-lg border border-white/10 bg-ink px-4 py-2.5 text-sm outline-none focus:border-brand"
               />
+            )}
+          </div>
+        )}
+
+        {asrEngine === "nemotron" && (
+          <div className="space-y-3">
+            <RepoSelect
+              label="Nemotron model"
+              value={nemotronModel}
+              onChange={setNemotronModel}
+              options={nemotronModels}
+            />
+            {nemotronInfo?.tier === "adaptation" && (
+              <p className="text-xs text-amber-300/80">
+                This language is adaptation-ready in Nemotron — accuracy may be lower unless
+                fine-tuned on in-domain data.
+              </p>
             )}
           </div>
         )}
@@ -198,6 +229,19 @@ export default function JobForm({
           </select>
         </div>
 
+        {translatorBackend === "nllb" && (
+          <RepoSelect label="NLLB model" value={nllbModel} onChange={setNllbModel} options={nllbModels} />
+        )}
+
+        {translatorBackend === "hunyuan" && (
+          <RepoSelect
+            label="Hunyuan model"
+            value={hunyuanModel}
+            onChange={setHunyuanModel}
+            options={hunyuanModels}
+          />
+        )}
+
         <div>
           <Label>Translation batch size</Label>
           <input
@@ -206,9 +250,7 @@ export default function JobForm({
             max={128}
             value={translateBatchSize}
             onChange={(e) =>
-              setTranslateBatchSize(
-                Math.min(128, Math.max(1, Number(e.target.value) || 1))
-              )
+              setTranslateBatchSize(Math.min(128, Math.max(1, Number(e.target.value) || 1)))
             }
             className="w-full rounded-lg border border-white/10 bg-ink px-4 py-2.5 outline-none focus:border-brand"
           />
@@ -240,18 +282,6 @@ export default function JobForm({
               />
             </div>
           )}
-        </div>
-
-        <div className="border-t border-white/10 pt-4">
-          <SubtitleSettingsPanel
-            settings={fontSettings}
-            onSourceChange={onSourceFontSize}
-            onTargetChange={onTargetFontSize}
-            onReset={onFontReset}
-            sourceLabel={languages[sourceLang] ?? sourceLang}
-            targetLabel={languages[targetLang] ?? targetLang}
-            embedded
-          />
         </div>
       </CollapsibleSection>
 
@@ -340,7 +370,9 @@ function Select({
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-lg border border-white/10 bg-ink px-4 py-2.5 outline-none focus:border-brand"
       >
-        {Object.entries(options).map(([code, name]) => (
+        {Object.entries(options)
+          .sort(([, a], [, b]) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+          .map(([code, name]) => (
           <option key={code} value={code}>
             {name}
           </option>

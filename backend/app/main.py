@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import tempfile
@@ -17,9 +18,16 @@ from pydantic import BaseModel
 from .config import (
     ASR_MODELS,
     FORCED_ALIGNER_MODELS,
+    HUNYUAN_MODELS,
     LANGUAGE_NAMES,
+    NEMOTRON_MODELS,
+    NLLB_MODELS,
+    SUBTITLE_FONT_FAMILIES,
     WHISPER_MODELS,
     PipelineConfig,
+    SubtitleStyleConfig,
+    nemotron_locale,
+    nemotron_tier,
     settings,
 )
 from .jobs import manager
@@ -77,6 +85,23 @@ def list_models() -> dict:
     return {"models": download_manager.list_models()}
 
 
+class HfAuthRequest(BaseModel):
+    token: Optional[str] = None
+
+
+@app.get("/api/models/hf-auth")
+def get_hf_auth() -> dict:
+    return download_manager.get_hf_auth_status()
+
+
+@app.put("/api/models/hf-auth")
+def set_hf_auth(body: HfAuthRequest) -> dict:
+    try:
+        return download_manager.set_hf_token(body.token)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 class EnsureJobModelsRequest(BaseModel):
     source_lang: str
     target_lang: str
@@ -86,20 +111,29 @@ class EnsureJobModelsRequest(BaseModel):
     qc_enabled: bool = False
     asr_engine: str = "qwen"
     whisper_model: str = "openai/whisper-large-v3"
+    nemotron_model: str = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    nllb_model: str = "facebook/nllb-200-distilled-600M"
+    hunyuan_model: str = "tencent/HY-MT1.5-1.8B"
 
 
 @app.post("/api/models/ensure-for-job")
 def ensure_job_models(body: EnsureJobModelsRequest) -> dict:
-    repos = repos_for_job(
-        source_lang=body.source_lang,
-        target_lang=body.target_lang,
-        asr_model=body.asr_model,
-        forced_aligner_model=body.forced_aligner_model,
-        translator_backend=body.translator_backend,
-        qc_enabled=body.qc_enabled,
-        asr_engine=body.asr_engine,
-        whisper_model=body.whisper_model,
-    )
+    try:
+        repos = repos_for_job(
+            source_lang=body.source_lang,
+            target_lang=body.target_lang,
+            asr_model=body.asr_model,
+            forced_aligner_model=body.forced_aligner_model,
+            translator_backend=body.translator_backend,
+            qc_enabled=body.qc_enabled,
+            asr_engine=body.asr_engine,
+            whisper_model=body.whisper_model,
+            nemotron_model=body.nemotron_model,
+            nllb_model=body.nllb_model,
+            hunyuan_model=body.hunyuan_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     result = download_manager.ensure_repos(repos)
     logger.info(
         "Ensure job models: repos=%s started=%s waiting=%s",
@@ -107,7 +141,7 @@ def ensure_job_models(body: EnsureJobModelsRequest) -> dict:
         result["started"],
         result["waiting"],
     )
-    return result
+    return {**result, "repos": repos}
 
 
 @app.post("/api/models/{model_id}/download")
@@ -158,7 +192,11 @@ async def model_download_progress(websocket: WebSocket, model_id: str) -> None:
 
 @app.get("/api/languages")
 def languages() -> dict:
-    return {"languages": LANGUAGE_NAMES}
+    nemotron_by_iso = {
+        iso: {"locale": nemotron_locale(iso), "tier": nemotron_tier(iso)}
+        for iso in LANGUAGE_NAMES
+    }
+    return {"languages": LANGUAGE_NAMES, "nemotron_by_iso": nemotron_by_iso}
 
 
 @app.get("/api/asr-models")
@@ -167,7 +205,27 @@ def asr_models() -> dict:
         "asr_models": ASR_MODELS,
         "forced_aligner_models": FORCED_ALIGNER_MODELS,
         "whisper_models": WHISPER_MODELS,
+        "nemotron_models": NEMOTRON_MODELS,
     }
+
+
+@app.get("/api/translation-models")
+def translation_models() -> dict:
+    return {"nllb_models": NLLB_MODELS, "hunyuan_models": HUNYUAN_MODELS}
+
+
+@app.get("/api/subtitle-fonts")
+def subtitle_fonts() -> dict:
+    return {"fonts": SUBTITLE_FONT_FAMILIES}
+
+
+def _parse_subtitle_style(raw: Optional[str]) -> SubtitleStyleConfig:
+    if not raw:
+        return SubtitleStyleConfig()
+    try:
+        return SubtitleStyleConfig.model_validate(json.loads(raw))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Invalid subtitle_style JSON: {exc}")
 
 
 @app.post("/api/jobs")
@@ -179,15 +237,34 @@ async def create_job(
     asr_model: str = Form("Qwen/Qwen3-ASR-1.7B"),
     forced_aligner_model: str = Form("Qwen/Qwen3-ForcedAligner-0.6B"),
     whisper_model: str = Form("openai/whisper-large-v3"),
+    nemotron_model: str = Form("nvidia/nemotron-3.5-asr-streaming-0.6b"),
     translator_backend: str = Form("helsinki"),
+    nllb_model: str = Form("facebook/nllb-200-distilled-600M"),
+    hunyuan_model: str = Form("tencent/HY-MT1.5-1.8B"),
     translate_batch_size: int = Form(16),
     qc_enabled: bool = Form(False),
     lmstudio_url: str = Form("http://localhost:1234/v1"),
     lmstudio_model: str = Form("local-model"),
+    subtitle_style: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
 ) -> dict:
     if not source_url and file is None:
         raise HTTPException(400, "Provide either source_url or an uploaded file.")
+
+    if translator_backend == "helsinki":
+        from .helsinki_models import resolve_helsinki_repo
+
+        try:
+            resolve_helsinki_repo(source_lang, target_lang)
+            if qc_enabled:
+                resolve_helsinki_repo(target_lang, source_lang)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    asr_label = {
+        "whisper": whisper_model,
+        "nemotron": nemotron_model,
+    }.get(asr_engine, asr_model)
 
     logger.info(
         "Creating job: source_url=%s file=%s lang=%s->%s engine=%s asr=%s",
@@ -196,7 +273,7 @@ async def create_job(
         source_lang,
         target_lang,
         asr_engine,
-        whisper_model if asr_engine == "whisper" else asr_model,
+        asr_label,
     )
 
     config = PipelineConfig(
@@ -206,11 +283,15 @@ async def create_job(
         asr_model=asr_model,
         forced_aligner_model=forced_aligner_model,
         whisper_model=whisper_model,
+        nemotron_model=nemotron_model,
         translator_backend=translator_backend,  # type: ignore[arg-type]
+        nllb_model=nllb_model,
+        hunyuan_model=hunyuan_model,
         translate_batch_size=translate_batch_size,
         qc_enabled=qc_enabled,
         lmstudio_url=lmstudio_url,
         lmstudio_model=lmstudio_model,
+        subtitle_style=_parse_subtitle_style(subtitle_style),
     )
     job = manager.create_job(config, source_url=source_url or None)
 
@@ -265,13 +346,20 @@ def get_media(job_id: str):
     return FileResponse(path)
 
 
+class ExportJobRequest(BaseModel):
+    subtitle_style: Optional[dict] = None
+
+
 @app.post("/api/jobs/{job_id}/export")
-def export_job(job_id: str) -> dict:
+def export_job(job_id: str, body: Optional[ExportJobRequest] = None) -> dict:
     job = manager.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    style_override = None
+    if body and body.subtitle_style:
+        style_override = SubtitleStyleConfig.model_validate(body.subtitle_style)
     try:
-        out = manager.export(job)
+        out = manager.export(job, subtitle_style=style_override)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, str(exc))
     return {"export_filename": out.name}
@@ -297,7 +385,6 @@ async def progress_ws(websocket: WebSocket, job_id: str) -> None:
         return
     queue = manager.subscribe(job_id)
     try:
-        # Send current state immediately.
         await websocket.send_json(
             {
                 "job_id": job.id,

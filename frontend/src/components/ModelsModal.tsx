@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   downloadModel,
   downloadRequiredModels,
+  getHfAuth,
   getModels,
+  setHfToken,
   subscribeModelProgress,
 } from "../api";
-import type { ModelInfo, ModelProgressEvent } from "../types";
+import type { HfAuthStatus, ModelInfo, ModelProgressEvent } from "../types";
 
 const CATEGORY_LABEL: Record<string, string> = {
   asr: "Speech recognition",
@@ -205,6 +207,10 @@ export default function ModelsModal({
           </button>
         </header>
 
+        <div className="border-b border-white/10 px-6 py-4">
+          <HfTokenSection />
+        </div>
+
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-6 py-3">
           <button
             type="button"
@@ -349,5 +355,105 @@ function StatusBadge({ status }: { status: string }) {
     >
       {STATUS_LABEL[status] ?? status}
     </span>
+  );
+}
+
+function HfTokenSection() {
+  const [auth, setAuth] = useState<HfAuthStatus | null>(null);
+  const [tokenInput, setTokenInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setAuth(await getHfAuth());
+    } catch {
+      setAuth({ configured: false, username: null, source: null });
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await setHfToken(tokenInput.trim() || null);
+      setAuth(status);
+      setTokenInput("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setAuth(await setHfToken(null));
+      setTokenInput("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const statusText = auth?.configured
+    ? auth.source === "env"
+      ? `Using token from environment${auth.username ? ` (${auth.username})` : ""}`
+      : `Logged in as ${auth.username ?? "HF user"}`
+    : "Not authenticated — public models only";
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-ink/40 p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium text-white/85">Hugging Face token (optional)</p>
+        <span className="text-xs text-white/45">{statusText}</span>
+      </div>
+      <p className="mb-3 text-xs text-white/40">
+        Required for gated models. Create a token at{" "}
+        <a
+          href="https://huggingface.co/settings/tokens"
+          target="_blank"
+          rel="noreferrer"
+          className="text-brand hover:underline"
+        >
+          huggingface.co/settings/tokens
+        </a>
+        .
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          type="password"
+          value={tokenInput}
+          onChange={(e) => setTokenInput(e.target.value)}
+          placeholder="hf_…"
+          autoComplete="off"
+          className="min-w-[200px] flex-1 rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || !tokenInput.trim()}
+          className="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={busy || !auth?.configured}
+          className="rounded-lg border border-white/15 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40"
+        >
+          Clear
+        </button>
+      </div>
+      {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
+    </div>
   );
 }

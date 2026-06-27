@@ -4,12 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # Map ISO-639-1 codes to the full language names Qwen3-ASR expects.
-# This is intentionally broad; only the source language is passed to the ASR model.
 LANGUAGE_NAMES: dict[str, str] = {
     "sv": "Swedish",
     "en": "English",
@@ -29,6 +28,24 @@ LANGUAGE_NAMES: dict[str, str] = {
     "zh": "Chinese",
     "ja": "Japanese",
     "ko": "Korean",
+    "cs": "Czech",
+    "uk": "Ukrainian",
+    "vi": "Vietnamese",
+    "hi": "Hindi",
+    "bg": "Bulgarian",
+    "hr": "Croatian",
+    "sk": "Slovak",
+    "hu": "Hungarian",
+    "ro": "Romanian",
+    "et": "Estonian",
+    "he": "Hebrew",
+    "th": "Thai",
+    "el": "Greek",
+    "lt": "Lithuanian",
+    "lv": "Latvian",
+    "sl": "Slovenian",
+    "nb": "Norwegian Bokmål",
+    "nn": "Norwegian Nynorsk",
 }
 
 
@@ -52,12 +69,176 @@ FORCED_ALIGNER_MODELS: list[dict[str, str]] = [
     {"repo_id": "Qwen/Qwen3-ForcedAligner-0.6B-hf", "label": "Qwen3 Forced Aligner 0.6B (HF weights)"},
 ]
 
-# Whisper presets exposed in the UI; a custom HF model name can also be supplied.
 WHISPER_MODELS: list[dict[str, str]] = [
     {"repo_id": "openai/whisper-small", "label": "Whisper Small"},
     {"repo_id": "openai/whisper-medium", "label": "Whisper Medium"},
     {"repo_id": "openai/whisper-large-v3", "label": "Whisper Large v3"},
+    {"repo_id": "openai/whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo"},
 ]
+
+NEMOTRON_MODELS: list[dict[str, str]] = [
+    {
+        "repo_id": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "label": "Nemotron 3.5 ASR Streaming 0.6B",
+    },
+]
+
+# Nemotron locale tiers (40 language-locales).
+NEMOTRON_LOCALES: list[dict[str, str]] = [
+    # Transcription-ready (19 locales)
+    {"locale": "en-US", "label": "English (US)", "tier": "ready"},
+    {"locale": "en-GB", "label": "English (UK)", "tier": "ready"},
+    {"locale": "es-US", "label": "Spanish (US)", "tier": "ready"},
+    {"locale": "es-ES", "label": "Spanish (Spain)", "tier": "ready"},
+    {"locale": "fr-FR", "label": "French (France)", "tier": "ready"},
+    {"locale": "fr-CA", "label": "French (Canada)", "tier": "ready"},
+    {"locale": "it-IT", "label": "Italian", "tier": "ready"},
+    {"locale": "pt-BR", "label": "Portuguese (Brazil)", "tier": "ready"},
+    {"locale": "pt-PT", "label": "Portuguese (Portugal)", "tier": "ready"},
+    {"locale": "nl-NL", "label": "Dutch", "tier": "ready"},
+    {"locale": "de-DE", "label": "German", "tier": "ready"},
+    {"locale": "tr-TR", "label": "Turkish", "tier": "ready"},
+    {"locale": "ru-RU", "label": "Russian", "tier": "ready"},
+    {"locale": "ar-AR", "label": "Arabic", "tier": "ready"},
+    {"locale": "hi-IN", "label": "Hindi", "tier": "ready"},
+    {"locale": "ja-JP", "label": "Japanese", "tier": "ready"},
+    {"locale": "ko-KR", "label": "Korean", "tier": "ready"},
+    {"locale": "vi-VN", "label": "Vietnamese", "tier": "ready"},
+    {"locale": "uk-UA", "label": "Ukrainian", "tier": "ready"},
+    # Broad-coverage (13 locales)
+    {"locale": "pl-PL", "label": "Polish", "tier": "broad"},
+    {"locale": "sv-SE", "label": "Swedish", "tier": "broad"},
+    {"locale": "cs-CZ", "label": "Czech", "tier": "broad"},
+    {"locale": "nb-NO", "label": "Norwegian Bokmål", "tier": "broad"},
+    {"locale": "da-DK", "label": "Danish", "tier": "broad"},
+    {"locale": "bg-BG", "label": "Bulgarian", "tier": "broad"},
+    {"locale": "fi-FI", "label": "Finnish", "tier": "broad"},
+    {"locale": "hr-HR", "label": "Croatian", "tier": "broad"},
+    {"locale": "sk-SK", "label": "Slovak", "tier": "broad"},
+    {"locale": "zh-CN", "label": "Mandarin Chinese", "tier": "broad"},
+    {"locale": "hu-HU", "label": "Hungarian", "tier": "broad"},
+    {"locale": "ro-RO", "label": "Romanian", "tier": "broad"},
+    {"locale": "et-EE", "label": "Estonian", "tier": "broad"},
+    # Adaptation-ready (8 locales)
+    {"locale": "el-GR", "label": "Greek", "tier": "adaptation"},
+    {"locale": "lt-LT", "label": "Lithuanian", "tier": "adaptation"},
+    {"locale": "lv-LV", "label": "Latvian", "tier": "adaptation"},
+    {"locale": "mt-MT", "label": "Maltese", "tier": "adaptation"},
+    {"locale": "sl-SI", "label": "Slovenian", "tier": "adaptation"},
+    {"locale": "he-IL", "label": "Hebrew", "tier": "adaptation"},
+    {"locale": "th-TH", "label": "Thai", "tier": "adaptation"},
+    {"locale": "nn-NO", "label": "Norwegian Nynorsk", "tier": "adaptation"},
+]
+
+ISO_TO_NEMOTRON_LOCALE: dict[str, str] = {
+    "en": "en-US",
+    "es": "es-ES",
+    "fr": "fr-FR",
+    "it": "it-IT",
+    "pt": "pt-PT",
+    "nl": "nl-NL",
+    "de": "de-DE",
+    "tr": "tr-TR",
+    "ru": "ru-RU",
+    "ar": "ar-AR",
+    "hi": "hi-IN",
+    "ja": "ja-JP",
+    "ko": "ko-KR",
+    "vi": "vi-VN",
+    "uk": "uk-UA",
+    "pl": "pl-PL",
+    "sv": "sv-SE",
+    "cs": "cs-CZ",
+    "no": "nb-NO",
+    "nb": "nb-NO",
+    "da": "da-DK",
+    "bg": "bg-BG",
+    "fi": "fi-FI",
+    "hr": "hr-HR",
+    "sk": "sk-SK",
+    "zh": "zh-CN",
+    "hu": "hu-HU",
+    "ro": "ro-RO",
+    "et": "et-EE",
+    "el": "el-GR",
+    "lt": "lt-LT",
+    "lv": "lv-LV",
+    "sl": "sl-SI",
+    "he": "he-IL",
+    "th": "th-TH",
+    "nn": "nn-NO",
+}
+
+
+def nemotron_locale(source_lang: str) -> str:
+    """Map ISO spoken language to Nemotron locale (e.g. sv → sv-SE)."""
+    if not source_lang or source_lang.lower() == "auto":
+        return "auto"
+    return ISO_TO_NEMOTRON_LOCALE.get(source_lang.lower(), source_lang)
+
+
+def nemotron_tier(source_lang: str) -> str | None:
+    """Return Nemotron support tier for a spoken ISO code, if known."""
+    locale = nemotron_locale(source_lang)
+    for entry in NEMOTRON_LOCALES:
+        if entry["locale"] == locale:
+            return entry["tier"]
+    return None
+
+
+HUNYUAN_MODELS: list[dict[str, str]] = [
+    {"repo_id": "tencent/HY-MT1.5-1.8B", "label": "HY-MT1.5-1.8B (fast, recommended)"},
+    {"repo_id": "tencent/HY-MT1.5-1.8B-FP8", "label": "HY-MT1.5-1.8B FP8"},
+    {"repo_id": "tencent/HY-MT1.5-1.8B-GPTQ-Int4", "label": "HY-MT1.5-1.8B GPTQ Int4"},
+    {"repo_id": "tencent/HY-MT1.5-7B", "label": "HY-MT1.5-7B"},
+    {"repo_id": "tencent/HY-MT1.5-7B-FP8", "label": "HY-MT1.5-7B FP8"},
+    {"repo_id": "tencent/HY-MT1.5-7B-GPTQ-Int4", "label": "HY-MT1.5-7B GPTQ Int4"},
+    {"repo_id": "tencent/Hy-MT2-1.8B", "label": "Hy-MT2-1.8B (recommended Hy-MT2)"},
+    {"repo_id": "tencent/Hy-MT2-1.8B-FP8", "label": "Hy-MT2-1.8B FP8"},
+    {"repo_id": "tencent/Hy-MT2-7B", "label": "Hy-MT2-7B"},
+    {"repo_id": "tencent/Hy-MT2-7B-FP8", "label": "Hy-MT2-7B FP8"},
+]
+
+NLLB_MODELS: list[dict[str, str]] = [
+    {
+        "repo_id": "facebook/nllb-200-distilled-600M",
+        "label": "NLLB 600M Distilled (fast, recommended)",
+    },
+    {"repo_id": "facebook/nllb-200-1.3B", "label": "NLLB 1.3B"},
+    {"repo_id": "facebook/nllb-200-distilled-1.3B", "label": "NLLB 1.3B Distilled"},
+    {"repo_id": "facebook/nllb-200-3.3B", "label": "NLLB 3.3B (best quality, heavy VRAM)"},
+]
+
+SUBTITLE_FONT_FAMILIES: list[str] = [
+    "Arial",
+    "Verdana",
+    "Tahoma",
+    "Georgia",
+    "Times New Roman",
+    "Courier New",
+    "Segoe UI",
+    "Trebuchet MS",
+]
+
+
+class TrackStyle(BaseModel):
+    font_family: str = "Arial"
+    font_size: int = Field(14, ge=12, le=48)
+    color: str = "#FFFFFF"
+    bold: bool = True
+    italic: bool = False
+    karaoke_active_color: str = "#FFD24A"
+    karaoke_done_color: str = "#B9C6FF"
+    background_opacity: float = Field(0.25, ge=0.0, le=1.0)
+
+
+class SubtitleStyleConfig(BaseModel):
+    source: TrackStyle = Field(default_factory=lambda: TrackStyle(
+        color="#FFFFFF", bold=True, italic=False, background_opacity=0.25
+    ))
+    target: TrackStyle = Field(default_factory=lambda: TrackStyle(
+        color="#A7F3D0", bold=False, italic=True, background_opacity=0.25
+    ))
 
 
 class PipelineConfig(BaseModel):
@@ -66,13 +247,15 @@ class PipelineConfig(BaseModel):
     source_lang: str = Field("sv", description="ISO code of the spoken language")
     target_lang: str = Field("en", description="ISO code of the translation language")
 
-    asr_engine: Literal["qwen", "whisper"] = "qwen"
+    asr_engine: Literal["qwen", "whisper", "nemotron"] = "qwen"
     asr_model: str = "Qwen/Qwen3-ASR-1.7B"
     forced_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
-    # Used when asr_engine == "whisper"; accepts a preset repo id or a custom HF name.
     whisper_model: str = "openai/whisper-large-v3"
+    nemotron_model: str = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 
-    translator_backend: Literal["helsinki", "hunyuan", "translategemma"] = "helsinki"
+    translator_backend: Literal["helsinki", "hunyuan", "translategemma", "nllb"] = "helsinki"
+    nllb_model: str = "facebook/nllb-200-distilled-600M"
+    hunyuan_model: str = "tencent/HY-MT1.5-1.8B"
     translate_batch_size: int = Field(16, ge=1, le=128, description="Cues per translation batch")
 
     qc_enabled: bool = False
@@ -80,13 +263,17 @@ class PipelineConfig(BaseModel):
     lmstudio_model: str = "local-model"
     qc_batch_size: int = Field(8, ge=1, le=32, description="Subtitle cues per LM Studio QC request")
 
+    subtitle_style: SubtitleStyleConfig = Field(default_factory=SubtitleStyleConfig)
+
     # Segmentation tuning.
     max_cue_chars: int = 84
     max_cue_duration: float = 6.0
     pause_gap: float = 0.6
 
     def helsinki_model(self, src: str, tgt: str) -> str:
-        return f"Helsinki-NLP/opus-mt-{src}-{tgt}"
+        from .helsinki_models import resolve_helsinki_repo
+
+        return resolve_helsinki_repo(src, tgt)
 
 
 class Settings(BaseSettings):
@@ -97,8 +284,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
     device: str = "cuda:0"
     torch_dtype: str = "bfloat16"
-    # Allow disabling heavy model loading for development / smoke testing.
     mock_models: bool = False
+    hf_token: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("HF_TOKEN", "SUBTITLE_HF_TOKEN", "hf_token"),
+    )
 
     @property
     def jobs_dir(self) -> Path:

@@ -5,16 +5,20 @@ import {
   ensureJobModels,
   exportDownloadUrl,
   getCues,
+  getLanguages,
+  getSubtitleFonts,
   mediaUrl,
   requestExport,
   subscribeProgress,
   waitForModelDownloads,
 } from "./api";
-import { useSubtitleFontSettings } from "./hooks/useSubtitleFontSettings";
+import { useSubtitleStyleSettings } from "./hooks/useSubtitleStyleSettings";
 import JobForm from "./components/JobForm";
 import ModelsModal from "./components/ModelsModal";
 import Player from "./components/Player";
-import type { Cue, CreateJobParams, ProgressEvent } from "./types";
+import CollapsibleSection from "./components/CollapsibleSection";
+import SubtitleSettingsPanel from "./components/SubtitleSettingsPanel";
+import type { Cue, CreateJobParams, JobFormSubmitParams, ProgressEvent } from "./types";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Queued",
@@ -29,29 +33,39 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-const TRANSLATOR_LABEL: Record<string, string> = {
-  helsinki: "Helsinki",
-  hunyuan: "Hunyuan",
-  translategemma: "TranslateGemma",
-};
-
-function shortModelName(repo: string): string {
-  const tail = repo.includes("/") ? repo.split("/").pop()! : repo;
-  return tail || repo;
+function translatorModelName(params: CreateJobParams, jobRepos: string[] = []): string {
+  switch (params.translatorBackend) {
+    case "nllb":
+      return params.nllbModel;
+    case "hunyuan":
+      return params.hunyuanModel;
+    case "translategemma":
+      return "google/translategemma-4b-it";
+    case "helsinki": {
+      const repo = jobRepos.find((r) => r.startsWith("Helsinki-NLP/"));
+      return repo ?? `Helsinki ${params.sourceLang}→${params.targetLang}`;
+    }
+    default:
+      return params.translatorBackend;
+  }
 }
 
-function statusLabel(status: string, params: CreateJobParams | null): string {
+function statusLabel(
+  status: string,
+  params: CreateJobParams | null,
+  jobRepos: string[] = []
+): string {
   if (status === "transcribing" && params) {
     const model =
       params.asrEngine === "whisper"
-        ? shortModelName(params.whisperModel)
-        : shortModelName(params.asrModel);
+        ? params.whisperModel
+        : params.asrEngine === "nemotron"
+          ? params.nemotronModel
+          : params.asrModel;
     return `Transcribing (${model})`;
   }
   if (status === "translating" && params) {
-    const backend =
-      TRANSLATOR_LABEL[params.translatorBackend] ?? params.translatorBackend;
-    return `Translating (${backend})`;
+    return `Translating (${translatorModelName(params, jobRepos)})`;
   }
   return STATUS_LABEL[status] ?? status;
 }
@@ -59,6 +73,7 @@ function statusLabel(status: string, params: CreateJobParams | null): string {
 export default function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobParams, setJobParams] = useState<CreateJobParams | null>(null);
+  const [jobRepos, setJobRepos] = useState<string[]>([]);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [cues, setCues] = useState<Cue[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,50 +83,62 @@ export default function App() {
   const [modelsWatchIds, setModelsWatchIds] = useState<string[]>([]);
   const [modelPrepMessage, setModelPrepMessage] = useState<string | null>(null);
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [languages, setLanguages] = useState<Record<string, string>>({});
+  const [fonts, setFonts] = useState<string[]>(["Arial", "Verdana", "Georgia"]);
   const unsubRef = useRef<(() => void) | null>(null);
   const {
-    settings: fontSettings,
-    setSourceFontSize,
-    setTargetFontSize,
-    reset: resetFonts,
-  } = useSubtitleFontSettings();
+    settings: styleSettings,
+    updateSource,
+    updateTarget,
+    reset: resetStyle,
+  } = useSubtitleStyleSettings();
 
   const busy =
     !!modelPrepMessage ||
     (!!jobId && progress?.status !== "done" && progress?.status !== "error");
 
-  const handleSubmit = useCallback(async (params: CreateJobParams) => {
-    setError(null);
-    setCues(null);
-    setProgress(null);
-    setExportReady(false);
-    setJobParams(params);
-    try {
-      const ensure = await ensureJobModels(params);
-      if (ensure.pending.length > 0) {
-        setModelsWatchIds(ensure.pending);
-        setModelsOpen(true);
-        setModelPrepMessage(
-          ensure.started.length > 0
-            ? `Downloading ${ensure.pending.length} required model(s)…`
-            : `Waiting for ${ensure.pending.length} model download(s)…`
-        );
-        await waitForModelDownloads(ensure.pending);
-        setModelPrepMessage(null);
-      }
+  const handleSubmit = useCallback(
+    async (params: JobFormSubmitParams) => {
+      setError(null);
+      setCues(null);
+      setProgress(null);
+      setExportReady(false);
+      setJobRepos([]);
+      const fullParams: CreateJobParams = { ...params, subtitleStyle: styleSettings };
+      setJobParams(fullParams);
+      try {
+        const ensure = await ensureJobModels(fullParams);
+        setJobRepos(ensure.repos ?? []);
+        if (ensure.pending.length > 0) {
+          setModelsWatchIds(ensure.pending);
+          setModelsOpen(true);
+          setModelPrepMessage(
+            ensure.started.length > 0
+              ? `Downloading ${ensure.pending.length} required model(s)…`
+              : `Waiting for ${ensure.pending.length} model download(s)…`
+          );
+          await waitForModelDownloads(ensure.pending);
+          setModelPrepMessage(null);
+        }
 
-      const { job_id } = await createJob(params);
-      setJobId(job_id);
-      unsubRef.current?.();
-      unsubRef.current = subscribeProgress(job_id, (e) => setProgress(e));
-    } catch (err) {
-      setModelPrepMessage(null);
-      setError((err as Error).message);
-    }
-  }, []);
+        const { job_id } = await createJob(fullParams);
+        setJobId(job_id);
+        unsubRef.current?.();
+        unsubRef.current = subscribeProgress(job_id, (e) => setProgress(e));
+      } catch (err) {
+        setModelPrepMessage(null);
+        setError((err as Error).message);
+      }
+    },
+    [styleSettings]
+  );
 
   useEffect(() => {
     checkBackendHealth().then(setBackendOk);
+    getLanguages()
+      .then((data) => setLanguages(data.languages))
+      .catch(() => undefined);
+    getSubtitleFonts().then(setFonts).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -125,12 +152,16 @@ export default function App() {
 
   useEffect(() => () => unsubRef.current?.(), []);
 
+  useEffect(() => {
+    if (exportReady) setExportReady(false);
+  }, [styleSettings]);
+
   const handleExport = async () => {
     if (!jobId) return;
     setExporting(true);
     setError(null);
     try {
-      await requestExport(jobId);
+      await requestExport(jobId, styleSettings);
       setExportReady(true);
     } catch (err) {
       setError((err as Error).message);
@@ -138,6 +169,11 @@ export default function App() {
       setExporting(false);
     }
   };
+
+  const sourceLabel =
+    (jobParams && languages[jobParams.sourceLang]) || jobParams?.sourceLang || "Source";
+  const targetLabel =
+    (jobParams && languages[jobParams.targetLang]) || jobParams?.targetLang || "Translation";
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
@@ -178,14 +214,7 @@ export default function App() {
 
       <div className="grid gap-8 lg:grid-cols-[420px_1fr]">
         <div className="space-y-4">
-          <JobForm
-            onSubmit={handleSubmit}
-            busy={busy}
-            fontSettings={fontSettings}
-            onSourceFontSize={setSourceFontSize}
-            onTargetFontSize={setTargetFontSize}
-            onFontReset={resetFonts}
-          />
+          <JobForm onSubmit={handleSubmit} busy={busy} />
           {modelPrepMessage && (
             <div className="rounded-xl border border-brand/40 bg-brand/10 px-4 py-3 text-sm text-brand">
               {modelPrepMessage}
@@ -200,12 +229,24 @@ export default function App() {
 
         <div className="space-y-4">
           {progress && (
-            <ProgressPanel progress={progress} params={jobParams} />
+            <ProgressPanel progress={progress} params={jobParams} jobRepos={jobRepos} />
           )}
 
           {cues && jobId ? (
             <>
-              <Player src={mediaUrl(jobId)} cues={cues} fonts={fontSettings} />
+              <Player src={mediaUrl(jobId)} cues={cues} style={styleSettings} />
+              <CollapsibleSection title="Subtitle settings" defaultOpen>
+                <SubtitleSettingsPanel
+                  settings={styleSettings}
+                  fonts={fonts}
+                  onSourceChange={updateSource}
+                  onTargetChange={updateTarget}
+                  onReset={resetStyle}
+                  sourceLabel={sourceLabel}
+                  targetLabel={targetLabel}
+                  embedded
+                />
+              </CollapsibleSection>
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleExport}
@@ -240,9 +281,11 @@ export default function App() {
 function ProgressPanel({
   progress,
   params,
+  jobRepos,
 }: {
   progress: ProgressEvent;
   params: CreateJobParams | null;
+  jobRepos: string[];
 }) {
   const pct = Math.round(progress.progress * 100);
   const isError = progress.status === "error";
@@ -250,7 +293,7 @@ function ProgressPanel({
     <div className="rounded-2xl border border-white/10 bg-panel/60 p-5">
       <div className="mb-2 flex items-center justify-between text-sm">
         <span className="font-semibold">
-          {statusLabel(progress.status, params)}
+          {statusLabel(progress.status, params, jobRepos)}
         </span>
         <span className="text-white/50">{pct}%</span>
       </div>

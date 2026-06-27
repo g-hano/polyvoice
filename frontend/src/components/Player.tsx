@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { SubtitleStyleSettings } from "../hooks/useSubtitleStyleSettings";
 import type { Cue } from "../types";
-import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
 import SubtitleOverlay from "./SubtitleOverlay";
 import CollapsibleSection from "./CollapsibleSection";
 
@@ -25,11 +25,11 @@ function findCueIndex(cues: Cue[], time: number): number {
 export default function Player({
   src,
   cues,
-  fonts,
+  style,
 }: {
   src: string;
   cues: Cue[];
-  fonts: SubtitleFontSettings;
+  style: SubtitleStyleSettings;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState(0);
@@ -61,18 +61,13 @@ export default function Player({
             source={activeCue.source}
             target={activeCue.target}
             time={time}
-            fonts={fonts}
+            style={style}
           />
         )}
       </div>
 
       <CollapsibleSection title="Subtitles & translation" defaultOpen>
-        <Transcript
-          cues={cues}
-          activeIndex={activeIndex}
-          fonts={fonts}
-          onSeek={seek}
-        />
+        <Transcript cues={cues} activeIndex={activeIndex} style={style} onSeek={seek} />
       </CollapsibleSection>
     </div>
   );
@@ -81,12 +76,12 @@ export default function Player({
 function Transcript({
   cues,
   activeIndex,
-  fonts,
+  style,
   onSeek,
 }: {
   cues: Cue[];
   activeIndex: number;
-  fonts: SubtitleFontSettings;
+  style: SubtitleStyleSettings;
   onSeek: (t: number) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -109,14 +104,26 @@ function Transcript({
           }`}
         >
           <div
-            className="leading-snug text-white"
-            style={{ fontSize: fonts.sourceFontSize }}
+            className="leading-snug"
+            style={{
+              fontSize: style.source.font_size,
+              fontFamily: style.source.font_family,
+              color: style.source.color,
+              fontWeight: style.source.bold ? 700 : 400,
+              fontStyle: style.source.italic ? "italic" : "normal",
+            }}
           >
             {cue.source.text}
           </div>
           <div
-            className="mt-0.5 leading-snug text-emerald-200/90"
-            style={{ fontSize: fonts.targetFontSize }}
+            className="mt-0.5 leading-snug"
+            style={{
+              fontSize: style.target.font_size,
+              fontFamily: style.target.font_family,
+              color: style.target.color,
+              fontWeight: style.target.bold ? 700 : 400,
+              fontStyle: style.target.italic ? "italic" : "normal",
+            }}
           >
             {cue.target.text}
           </div>

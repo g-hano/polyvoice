@@ -1,7 +1,14 @@
-import type { SubtitleFontSettings } from "../hooks/useSubtitleFontSettings";
+import type { SubtitleStyleSettings, TrackStyle } from "../types";
+
+const TIER_LABEL: Record<string, string> = {
+  ready: "Transcription-ready",
+  broad: "Broad-coverage",
+  adaptation: "Adaptation-ready",
+};
 
 export default function SubtitleSettingsPanel({
   settings,
+  fonts,
   onSourceChange,
   onTargetChange,
   onReset,
@@ -9,23 +16,25 @@ export default function SubtitleSettingsPanel({
   targetLabel = "Translation",
   embedded = false,
 }: {
-  settings: SubtitleFontSettings;
-  onSourceChange: (px: number) => void;
-  onTargetChange: (px: number) => void;
+  settings: SubtitleStyleSettings;
+  fonts: string[];
+  onSourceChange: (patch: Partial<TrackStyle>) => void;
+  onTargetChange: (patch: Partial<TrackStyle>) => void;
   onReset: () => void;
   sourceLabel?: string;
   targetLabel?: string;
-  /** When true, omit outer card chrome (used inside Advanced settings). */
   embedded?: boolean;
 }) {
   return (
     <div className={embedded ? "" : "rounded-xl border border-white/10 bg-panel/60 p-4"}>
-      <div className={`flex items-center justify-between ${embedded ? "mb-3" : "mb-3"}`}>
+      <div className="mb-3 flex items-center justify-between">
         {!embedded && (
           <h3 className="text-sm font-semibold text-white/90">Subtitle appearance</h3>
         )}
         {embedded && (
-          <p className="text-xs text-white/50">Adjust on-screen and transcript font sizes.</p>
+          <p className="text-xs text-white/50">
+            Adjust on-screen preview and export styling. Export uses system fonts.
+          </p>
         )}
         <button
           type="button"
@@ -35,15 +44,17 @@ export default function SubtitleSettingsPanel({
           Reset
         </button>
       </div>
-      <div className="space-y-4">
-        <FontSlider
+      <div className="space-y-6">
+        <TrackEditor
           label={sourceLabel}
-          value={settings.sourceFontSize}
+          track={settings.source}
+          fonts={fonts}
           onChange={onSourceChange}
         />
-        <FontSlider
+        <TrackEditor
           label={targetLabel}
-          value={settings.targetFontSize}
+          track={settings.target}
+          fonts={fonts}
           onChange={onTargetChange}
         />
       </div>
@@ -51,37 +62,143 @@ export default function SubtitleSettingsPanel({
   );
 }
 
-function FontSlider({
+function TrackEditor({
+  label,
+  track,
+  fonts,
+  onChange,
+}: {
+  label: string;
+  track: TrackStyle;
+  fonts: string[];
+  onChange: (patch: Partial<TrackStyle>) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-ink/40 p-3">
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-white/45">{label}</p>
+      <div className="space-y-3">
+        <label className="block text-xs">
+          <span className="text-white/55">Font</span>
+          <select
+            value={track.font_family}
+            onChange={(e) => onChange({ font_family: e.target.value })}
+            className="mt-1 w-full rounded-lg border border-white/10 bg-ink px-3 py-2 outline-none focus:border-brand"
+          >
+            {fonts.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <div className="mb-1 flex justify-between text-xs">
+            <span className="text-white/55">Size</span>
+            <span className="font-mono text-white/45">{track.font_size}px</span>
+          </div>
+          <input
+            type="range"
+            min={12}
+            max={48}
+            step={1}
+            value={track.font_size}
+            onChange={(e) => onChange({ font_size: Number(e.target.value) })}
+            className="subtitle-font-slider w-full"
+          />
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <ColorField label="Text color" value={track.color} onChange={(c) => onChange({ color: c })} />
+          <ColorField
+            label="Karaoke active"
+            value={track.karaoke_active_color}
+            onChange={(c) => onChange({ karaoke_active_color: c })}
+          />
+          <ColorField
+            label="Karaoke done"
+            value={track.karaoke_done_color}
+            onChange={(c) => onChange({ karaoke_done_color: c })}
+          />
+          <label className="block text-xs">
+            <span className="text-white/55">Background</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(track.background_opacity * 100)}
+              onChange={(e) => onChange({ background_opacity: Number(e.target.value) / 100 })}
+              className="subtitle-font-slider mt-1 w-full"
+            />
+          </label>
+        </div>
+
+        <div className="flex gap-4 text-xs">
+          <label className="flex cursor-pointer items-center gap-2 text-white/70">
+            <input
+              type="checkbox"
+              checked={track.bold}
+              onChange={(e) => onChange({ bold: e.target.checked })}
+            />
+            Bold
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-white/70">
+            <input
+              type="checkbox"
+              checked={track.italic}
+              onChange={(e) => onChange({ italic: e.target.checked })}
+            />
+            Italic
+          </label>
+        </div>
+
+        <p
+          className="truncate rounded px-2 py-1"
+          style={{
+            fontSize: track.font_size,
+            fontFamily: track.font_family,
+            color: track.color,
+            fontWeight: track.bold ? 700 : 400,
+            fontStyle: track.italic ? "italic" : "normal",
+            backgroundColor: `rgba(0,0,0,${track.background_opacity})`,
+          }}
+          aria-hidden
+        >
+          Sample — {label}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ColorField({
   label,
   value,
   onChange,
 }: {
   label: string;
-  value: number;
-  onChange: (px: number) => void;
+  value: string;
+  onChange: (color: string) => void;
 }) {
   return (
-    <label className="block">
-      <div className="mb-1.5 flex items-center justify-between text-xs">
-        <span className="text-white/60">{label}</span>
-        <span className="font-mono text-white/45">{value}px</span>
+    <label className="block text-xs">
+      <span className="text-white/55">{label}</span>
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-8 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="min-w-0 flex-1 rounded border border-white/10 bg-ink px-2 py-1 font-mono text-[11px] outline-none focus:border-brand"
+        />
       </div>
-      <input
-        type="range"
-        min={12}
-        max={48}
-        step={1}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="subtitle-font-slider w-full"
-      />
-      <p
-        className="mt-2 truncate rounded bg-black/30 px-2 py-1 text-white/80"
-        style={{ fontSize: value }}
-        aria-hidden
-      >
-        Sample text — {label}
-      </p>
     </label>
   );
 }
+
+export { TIER_LABEL };

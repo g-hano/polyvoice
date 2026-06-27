@@ -46,7 +46,23 @@ export interface JobInfo {
   export_filename?: string | null;
 }
 
-export type AsrEngine = "qwen" | "whisper";
+export type AsrEngine = "qwen" | "whisper" | "nemotron";
+
+export interface TrackStyle {
+  font_family: string;
+  font_size: number;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  karaoke_active_color: string;
+  karaoke_done_color: string;
+  background_opacity: number;
+}
+
+export interface SubtitleStyleSettings {
+  source: TrackStyle;
+  target: TrackStyle;
+}
 
 export interface CreateJobParams {
   sourceUrl?: string;
@@ -57,16 +73,34 @@ export interface CreateJobParams {
   asrModel: string;
   forcedAlignerModel: string;
   whisperModel: string;
+  nemotronModel: string;
   translatorBackend: string;
+  nllbModel: string;
+  hunyuanModel: string;
   translateBatchSize: number;
   qcEnabled: boolean;
   lmstudioUrl: string;
   lmstudioModel: string;
+  subtitleStyle: SubtitleStyleSettings;
 }
+
+/** Job form fields; subtitle style is configured separately below the player. */
+export type JobFormSubmitParams = Omit<CreateJobParams, "subtitleStyle">;
 
 export interface AsrModelOption {
   repo_id: string;
   label: string;
+}
+
+export interface NemotronLocaleOption {
+  locale: string;
+  label: string;
+  tier: "ready" | "broad" | "adaptation";
+}
+
+export interface NemotronLangInfo {
+  locale: string;
+  tier: string | null;
 }
 
 export type ModelDownloadStatus =
@@ -97,4 +131,10 @@ export interface ModelProgressEvent {
   message: string;
   error?: string | null;
   size_on_disk: number;
+}
+
+export interface HfAuthStatus {
+  configured: boolean;
+  username?: string | null;
+  source?: "env" | "runtime" | null;
 }

@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import traceback
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional
 
-from huggingface_hub import HfApi, hf_hub_download, scan_cache_dir, try_to_load_from_cache
+from huggingface_hub import HfApi, scan_cache_dir, snapshot_download, try_to_load_from_cache
 from huggingface_hub.errors import LocalEntryNotFoundError
+
+from .config import settings
 
 
 class ModelCategory(str, Enum):
@@ -101,25 +104,88 @@ MODEL_REGISTRY: List[ModelEntry] = [
         description="Whisper large v3 — best accuracy, most VRAM.",
     ),
     ModelEntry(
-        id="opus-mt-sv-en",
-        repo_id="Helsinki-NLP/opus-mt-sv-en",
-        label="Helsinki opus-mt sv→en",
-        category=ModelCategory.translation,
-        description="Swedish to English (Helsinki backend).",
+        id="whisper-large-v3-turbo",
+        repo_id="openai/whisper-large-v3-turbo",
+        label="Whisper Large v3 Turbo",
+        category=ModelCategory.asr,
+        description="Whisper large v3 turbo — faster with minor quality trade-off.",
     ),
     ModelEntry(
-        id="opus-mt-en-sv",
-        repo_id="Helsinki-NLP/opus-mt-en-sv",
-        label="Helsinki opus-mt en→sv",
-        category=ModelCategory.translation,
-        description="English to Swedish (QC back-translation).",
+        id="nemotron-3.5-asr",
+        repo_id="nvidia/nemotron-3.5-asr-streaming-0.6b",
+        label="Nemotron 3.5 ASR Streaming 0.6B",
+        category=ModelCategory.asr,
+        description="NVIDIA Nemotron multilingual ASR (40 locales).",
     ),
     ModelEntry(
-        id="hunyuan-mt",
+        id="hunyuan-mt1.5-1.8b",
+        repo_id="tencent/HY-MT1.5-1.8B",
+        label="Hunyuan HY-MT1.5-1.8B",
+        category=ModelCategory.translation,
+        description="Tencent Hunyuan 1.8B translation model (recommended).",
+    ),
+    ModelEntry(
+        id="hunyuan-mt1.5-1.8b-fp8",
+        repo_id="tencent/HY-MT1.5-1.8B-FP8",
+        label="Hunyuan HY-MT1.5-1.8B FP8",
+        category=ModelCategory.translation,
+        description="Hunyuan 1.8B FP8 quantized.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt1.5-1.8b-gptq",
+        repo_id="tencent/HY-MT1.5-1.8B-GPTQ-Int4",
+        label="Hunyuan HY-MT1.5-1.8B GPTQ Int4",
+        category=ModelCategory.translation,
+        description="Hunyuan 1.8B GPTQ Int4 quantized.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt1.5-7b",
+        repo_id="tencent/HY-MT1.5-7B",
+        label="Hunyuan HY-MT1.5-7B",
+        category=ModelCategory.translation,
+        description="Tencent Hunyuan 7B translation model.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt1.5-7b-fp8",
+        repo_id="tencent/HY-MT1.5-7B-FP8",
+        label="Hunyuan HY-MT1.5-7B FP8",
+        category=ModelCategory.translation,
+        description="Hunyuan 7B FP8 quantized.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt1.5-7b-gptq",
+        repo_id="tencent/HY-MT1.5-7B-GPTQ-Int4",
+        label="Hunyuan HY-MT1.5-7B GPTQ Int4",
+        category=ModelCategory.translation,
+        description="Hunyuan 7B GPTQ Int4 quantized.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt2-1.8b",
         repo_id="tencent/Hy-MT2-1.8B",
         label="Hunyuan Hy-MT2-1.8B",
         category=ModelCategory.translation,
-        description="LLM translation backend.",
+        description="Tencent Hy-MT2 1.8B fast-thinking translation model.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt2-1.8b-fp8",
+        repo_id="tencent/Hy-MT2-1.8B-FP8",
+        label="Hunyuan Hy-MT2-1.8B FP8",
+        category=ModelCategory.translation,
+        description="Hy-MT2 1.8B FP8 quantized.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt2-7b",
+        repo_id="tencent/Hy-MT2-7B",
+        label="Hunyuan Hy-MT2-7B",
+        category=ModelCategory.translation,
+        description="Tencent Hy-MT2 7B fast-thinking translation model.",
+    ),
+    ModelEntry(
+        id="hunyuan-mt2-7b-fp8",
+        repo_id="tencent/Hy-MT2-7B-FP8",
+        label="Hunyuan Hy-MT2-7B FP8",
+        category=ModelCategory.translation,
+        description="Hy-MT2 7B FP8 quantized.",
     ),
     ModelEntry(
         id="translategemma",
@@ -128,15 +194,50 @@ MODEL_REGISTRY: List[ModelEntry] = [
         category=ModelCategory.translation,
         description="Google TranslateGemma instruction model.",
     ),
+    ModelEntry(
+        id="nllb-600m-distilled",
+        repo_id="facebook/nllb-200-distilled-600M",
+        label="NLLB 600M Distilled",
+        category=ModelCategory.translation,
+        description="Meta NLLB-200 distilled 600M — fast multilingual translation.",
+    ),
+    ModelEntry(
+        id="nllb-1.3b",
+        repo_id="facebook/nllb-200-1.3B",
+        label="NLLB 1.3B",
+        category=ModelCategory.translation,
+        description="Meta NLLB-200 1.3B parameter model.",
+    ),
+    ModelEntry(
+        id="nllb-1.3b-distilled",
+        repo_id="facebook/nllb-200-distilled-1.3B",
+        label="NLLB 1.3B Distilled",
+        category=ModelCategory.translation,
+        description="Meta NLLB-200 distilled 1.3B.",
+    ),
+    ModelEntry(
+        id="nllb-3.3b",
+        repo_id="facebook/nllb-200-3.3B",
+        label="NLLB 3.3B",
+        category=ModelCategory.translation,
+        description="Meta NLLB-200 3.3B — best quality, heavy VRAM.",
+    ),
 ]
 
 _REGISTRY_BY_ID = {m.id: m for m in MODEL_REGISTRY}
 _REGISTRY_BY_REPO = {m.repo_id: m for m in MODEL_REGISTRY}
 
 TRANSLATOR_REPOS = {
-    "hunyuan": "tencent/Hy-MT2-1.8B",
     "translategemma": "google/translategemma-4b-it",
 }
+
+
+def get_hf_token() -> Optional[str]:
+    """Return the active HF token (runtime override > settings env)."""
+    mgr = globals().get("download_manager")
+    if mgr is not None and mgr.runtime_hf_token:
+        return mgr.runtime_hf_token
+    return settings.hf_token or None
 
 
 def repos_for_job(
@@ -149,19 +250,29 @@ def repos_for_job(
     qc_enabled: bool,
     asr_engine: str = "qwen",
     whisper_model: str = "openai/whisper-large-v3",
+    nemotron_model: str = "nvidia/nemotron-3.5-asr-streaming-0.6b",
+    nllb_model: str = "facebook/nllb-200-distilled-600M",
+    hunyuan_model: str = "tencent/HY-MT1.5-1.8B",
 ) -> List[str]:
     """Return Hugging Face repo ids required for a pipeline job."""
     if asr_engine == "whisper":
         repos = [whisper_model]
+    elif asr_engine == "nemotron":
+        repos = [nemotron_model]
     else:
         repos = [asr_model, forced_aligner_model]
     if translator_backend == "helsinki":
-        repos.append(f"Helsinki-NLP/opus-mt-{source_lang}-{target_lang}")
+        from .helsinki_models import resolve_helsinki_repo
+
+        repos.append(resolve_helsinki_repo(source_lang, target_lang))
         if qc_enabled:
-            repos.append(f"Helsinki-NLP/opus-mt-{target_lang}-{source_lang}")
+            repos.append(resolve_helsinki_repo(target_lang, source_lang))
+    elif translator_backend == "nllb":
+        repos.append(nllb_model)
+    elif translator_backend == "hunyuan":
+        repos.append(hunyuan_model)
     elif translator_backend in TRANSLATOR_REPOS:
         repos.append(TRANSLATOR_REPOS[translator_backend])
-    # Preserve order, drop duplicates.
     return list(dict.fromkeys(repos))
 
 
@@ -222,6 +333,56 @@ class ModelDownloadManager:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = threading.Lock()
         self._extras: Dict[str, ModelEntry] = {}
+        self.runtime_hf_token: Optional[str] = None
+        if settings.hf_token:
+            os.environ["HF_TOKEN"] = settings.hf_token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = settings.hf_token
+
+    def _apply_hf_token_env(self) -> None:
+        token = get_hf_token()
+        if token:
+            os.environ["HF_TOKEN"] = token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+        else:
+            os.environ.pop("HF_TOKEN", None)
+            os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+
+    def set_hf_token(self, token: Optional[str]) -> dict:
+        """Set or clear runtime HF token; validate with whoami when setting."""
+        if token is not None and not token.strip():
+            token = None
+        elif token is not None:
+            token = token.strip()
+            api = HfApi(token=token)
+            try:
+                info = api.whoami()
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"Invalid Hugging Face token: {exc}") from exc
+            self.runtime_hf_token = token
+            self._apply_hf_token_env()
+            return {
+                "configured": True,
+                "username": info.get("name") or info.get("fullname"),
+                "source": "runtime",
+            }
+
+        self.runtime_hf_token = None
+        self._apply_hf_token_env()
+        return self.get_hf_auth_status()
+
+    def get_hf_auth_status(self) -> dict:
+        token = get_hf_token()
+        if not token:
+            return {"configured": False, "username": None, "source": None}
+
+        source = "runtime" if self.runtime_hf_token else "env"
+        try:
+            info = HfApi(token=token).whoami()
+            username = info.get("name") or info.get("fullname")
+        except Exception:  # noqa: BLE001
+            return {"configured": False, "username": None, "source": source}
+
+        return {"configured": True, "username": username, "source": source}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -239,7 +400,7 @@ class ModelDownloadManager:
         model_id = f"repo:{repo_id.replace('/', '__')}"
         if model_id not in self._extras:
             lowered = repo_id.lower()
-            if "asr" in lowered or "aligner" in lowered or "whisper" in lowered:
+            if "asr" in lowered or "aligner" in lowered or "whisper" in lowered or "nemotron" in lowered:
                 category = ModelCategory.asr
             else:
                 category = ModelCategory.translation
@@ -356,6 +517,7 @@ class ModelDownloadManager:
     def _download_worker(self, model_id: str) -> None:
         entry = self._entry(model_id)
         state = self._state(model_id)
+        token = get_hf_token()
         try:
             state.status = DownloadStatus.downloading
             state.progress = 0.0
@@ -363,22 +525,17 @@ class ModelDownloadManager:
             state.message = "Fetching file list..."
             self._emit(model_id)
 
-            api = HfApi()
-            files = api.list_repo_files(entry.repo_id)
-            total = max(len(files), 1)
-
-            for i, filename in enumerate(files):
-                state.message = f"{filename} ({i + 1}/{total})"
-                self._emit(model_id)
-                tqdm_cls = _make_tqdm(state, i, total)
-                hf_hub_download(
-                    entry.repo_id,
-                    filename,
-                    repo_type="model",
-                    tqdm_class=tqdm_cls,
-                )
-                state.progress = (i + 1) / total
-                self._emit(model_id)
+            state.message = "Downloading repository..."
+            self._emit(model_id)
+            tqdm_cls = _make_tqdm(state, 0, 1)
+            snapshot_download(
+                repo_id=entry.repo_id,
+                repo_type="model",
+                token=token,
+                tqdm_class=tqdm_cls,
+            )
+            state.progress = 1.0
+            self._emit(model_id)
 
             state.status = DownloadStatus.downloaded
             state.progress = 1.0

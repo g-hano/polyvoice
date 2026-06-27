@@ -6,10 +6,13 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+from ..config import SubtitleStyleConfig, TrackStyle
 from ..models import Cue, Line, Word
 from .segment import Segment
+
+ASS_FONT_SCALE = 2.7
 
 
 def _split_target_words(text: str) -> List[str]:
@@ -73,6 +76,52 @@ def _ass_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
+def _hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
+    """Convert #RRGGBB to ASS &HAABBGGRR format."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return "&H00FFFFFF"
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
+
+
+def _ass_font_size(px: int) -> int:
+    return max(18, round(px * ASS_FONT_SCALE))
+
+
+def _track_style_line(name: str, track: TrackStyle, margin_v: int) -> str:
+    primary = _hex_to_ass_color(track.color)
+    karaoke = _hex_to_ass_color(track.karaoke_active_color)
+    bold = -1 if track.bold else 0
+    italic = -1 if track.italic else 0
+    fontsize = _ass_font_size(track.font_size)
+    return (
+        f"Style: {name},{track.font_family},{fontsize},{primary},{karaoke},"
+        f"&H00000000,&H64000000,{bold},{italic},0,0,100,100,0,0,1,3,1,2,80,80,{margin_v},1"
+    )
+
+
+def build_ass_header(style: Optional[SubtitleStyleConfig] = None) -> str:
+    style = style or SubtitleStyleConfig()
+    source_line = _track_style_line("Source", style.source, 120)
+    target_line = _track_style_line("Target", style.target, 60)
+    return f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+{source_line}
+{target_line}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+
 def _karaoke_line(words: List[Word], cue_start: float) -> str:
     """Build a line with ASS \\k karaoke tags (centiseconds per word)."""
     if not words:
@@ -80,7 +129,6 @@ def _karaoke_line(words: List[Word], cue_start: float) -> str:
     parts: List[str] = []
     prev_end = cue_start
     for word in words:
-        # leading gap as an unhighlighted pause
         gap_cs = max(int(round((word.start - prev_end) * 100)), 0)
         if gap_cs > 0:
             parts.append(f"{{\\k{gap_cs}}} ")
@@ -90,25 +138,8 @@ def _karaoke_line(words: List[Word], cue_start: float) -> str:
     return "".join(parts).strip()
 
 
-_ASS_HEADER = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Source,Arial,54,&H00FFFFFF,&H0000C8FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,1,2,80,80,120,1
-Style: Target,Arial,44,&H00B4F0C8,&H0000C8FF,&H00000000,&H64000000,0,1,0,0,100,100,0,0,1,3,1,2,80,80,60,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-
-def build_ass(cues: List[Cue]) -> str:
-    lines = [_ASS_HEADER]
+def build_ass(cues: List[Cue], style: Optional[SubtitleStyleConfig] = None) -> str:
+    lines = [build_ass_header(style)]
     for cue in cues:
         start = _fmt_ass_time(cue.start)
         end = _fmt_ass_time(cue.end)
@@ -127,7 +158,11 @@ def build_ass(cues: List[Cue]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_artifacts(cues: List[Cue], job_dir: Path) -> tuple[Path, Path]:
+def write_artifacts(
+    cues: List[Cue],
+    job_dir: Path,
+    style: Optional[SubtitleStyleConfig] = None,
+) -> tuple[Path, Path]:
     """Write cues.json and subtitles.ass; return their paths."""
     import json
 
@@ -137,7 +172,7 @@ def write_artifacts(cues: List[Cue], job_dir: Path) -> tuple[Path, Path]:
         json.dumps([c.model_dump() for c in cues], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    ass_path.write_text(build_ass(cues), encoding="utf-8")
+    ass_path.write_text(build_ass(cues, style), encoding="utf-8")
     return cues_path, ass_path
 
 
@@ -146,11 +181,7 @@ def burn_in(media_path: Path, ass_path: Path, out_path: Path) -> Path:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH.")
-    # ffmpeg's subtitles filter needs an escaped path (esp. on Windows).
     ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
-    # Burning subtitles requires re-encoding the video. Use a high-quality x264
-    # encode (CRF 18 is visually near-lossless) and copy the audio untouched so
-    # the output quality stays as close to the source as possible.
     cmd = [
         ffmpeg,
         "-y",

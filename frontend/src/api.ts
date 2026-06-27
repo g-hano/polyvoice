@@ -1,4 +1,14 @@
-import type { AsrModelOption, Cue, CreateJobParams, JobInfo, ModelInfo, ModelProgressEvent, ProgressEvent } from "./types";
+import type {
+  AsrModelOption,
+  Cue,
+  CreateJobParams,
+  HfAuthStatus,
+  JobInfo,
+  ModelInfo,
+  ModelProgressEvent,
+  ProgressEvent,
+  SubtitleStyleSettings,
+} from "./types";
 
 const API = "/api";
 
@@ -41,6 +51,7 @@ export interface EnsureJobModelsResult {
   waiting: string[];
   ready: string[];
   pending: string[];
+  repos: string[];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -60,6 +71,9 @@ export async function ensureJobModels(
       asr_model: params.asrModel,
       forced_aligner_model: params.forcedAlignerModel,
       whisper_model: params.whisperModel,
+      nemotron_model: params.nemotronModel,
+      nllb_model: params.nllbModel,
+      hunyuan_model: params.hunyuanModel,
       translator_backend: params.translatorBackend,
       qc_enabled: params.qcEnabled,
     }),
@@ -95,11 +109,15 @@ export async function createJob(params: CreateJobParams): Promise<{ job_id: stri
   form.append("asr_model", params.asrModel);
   form.append("forced_aligner_model", params.forcedAlignerModel);
   form.append("whisper_model", params.whisperModel);
+  form.append("nemotron_model", params.nemotronModel);
   form.append("translator_backend", params.translatorBackend);
+  form.append("nllb_model", params.nllbModel);
+  form.append("hunyuan_model", params.hunyuanModel);
   form.append("translate_batch_size", String(params.translateBatchSize));
   form.append("qc_enabled", params.qcEnabled ? "true" : "false");
   form.append("lmstudio_url", params.lmstudioUrl);
   form.append("lmstudio_model", params.lmstudioModel);
+  form.append("subtitle_style", JSON.stringify(params.subtitleStyle));
 
   const res = await apiFetch(`${API}/jobs`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await readApiError(res));
@@ -122,24 +140,69 @@ export function mediaUrl(jobId: string): string {
   return `${API}/jobs/${jobId}/media`;
 }
 
-export async function getLanguages(): Promise<Record<string, string>> {
+export async function getLanguages(): Promise<{
+  languages: Record<string, string>;
+  nemotron_by_iso?: Record<string, { locale: string; tier: string | null }>;
+}> {
   const res = await apiFetch(`${API}/languages`);
   const data = await res.json();
-  return data.languages;
+  return data;
 }
 
 export async function getAsrModels(): Promise<{
   asr_models: AsrModelOption[];
   forced_aligner_models: AsrModelOption[];
   whisper_models: AsrModelOption[];
+  nemotron_models: AsrModelOption[];
 }> {
   const res = await apiFetch(`${API}/asr-models`);
   if (!res.ok) throw new Error("Failed to load ASR models");
   return res.json();
 }
 
-export async function requestExport(jobId: string): Promise<{ export_filename: string }> {
-  const res = await apiFetch(`${API}/jobs/${jobId}/export`, { method: "POST" });
+export async function getTranslationModels(): Promise<{
+  nllb_models: AsrModelOption[];
+  hunyuan_models: AsrModelOption[];
+}> {
+  const res = await apiFetch(`${API}/translation-models`);
+  if (!res.ok) throw new Error("Failed to load translation models");
+  return res.json();
+}
+
+export async function getSubtitleFonts(): Promise<string[]> {
+  const res = await apiFetch(`${API}/subtitle-fonts`);
+  if (!res.ok) return ["Arial", "Verdana", "Georgia"];
+  const data = await res.json();
+  return data.fonts ?? ["Arial"];
+}
+
+export async function getHfAuth(): Promise<HfAuthStatus> {
+  const res = await apiFetch(`${API}/models/hf-auth`);
+  if (!res.ok) throw new Error("Failed to load HF auth status");
+  return res.json();
+}
+
+export async function setHfToken(token: string | null): Promise<HfAuthStatus> {
+  const res = await apiFetch(`${API}/models/hf-auth`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function requestExport(
+  jobId: string,
+  subtitleStyle?: SubtitleStyleSettings
+): Promise<{ export_filename: string }> {
+  const res = await apiFetch(`${API}/jobs/${jobId}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(
+      subtitleStyle ? { subtitle_style: subtitleStyle } : {}
+    ),
+  });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }

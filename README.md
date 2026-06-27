@@ -1,6 +1,6 @@
 # DualSub
 
-**Local dual-subtitle pipeline for video and audio.** Transcribe speech with **Qwen3-ASR** or **Whisper**, translate with Helsinki-NLP (or optional LLM backends), optionally refine translations via LM Studio, and play the result in a web player with **two subtitle tracks** and **live word-by-word karaoke highlighting**. Export a high-quality burned-in MP4 when you are done.
+**Local dual-subtitle pipeline for video and audio.** Transcribe speech with **Qwen3-ASR**, **Whisper**, or **Nemotron 3.5**, translate with Helsinki-NLP, **NLLB-200**, or optional LLM backends, optionally refine translations via LM Studio, and play the result in a web player with **two subtitle tracks** and **live word-by-word karaoke highlighting**. Customize subtitle colors and fonts in the player and export. Export a high-quality burned-in MP4 when you are done.
 
 Everything runs on your machine — no cloud API keys required for the core workflow.
 
@@ -11,14 +11,15 @@ Everything runs on your machine — no cloud API keys required for the core work
 | Capability | Details |
 |---|---|
 | **Input** | YouTube URL (`yt-dlp`, highest available quality) or local video/audio upload |
-| **ASR engines** | **Qwen3-ASR** (0.6B / 1.7B, standard or HF weights) or **Whisper** (small / medium / large-v3, or any custom Hugging Face model) |
-| **Word timestamps** | Qwen: Qwen3 Forced Aligner · Whisper: built-in word-level timestamps (`return_timestamps="word"`) |
-| **Translation** | Helsinki `opus-mt` (default, batched), Hunyuan Hy-MT2, or TranslateGemma 4B (both batched) |
+| **ASR engines** | **Qwen3-ASR**, **Whisper** (incl. large-v3-turbo), or **Nemotron 3.5** (40 locales) |
+| **Word timestamps** | Qwen: Forced Aligner · Whisper: built-in · Nemotron: token timestamps → words |
+| **Translation** | Helsinki `opus-mt`, **NLLB-200** (4 sizes), Hunyuan Hy-MT2, or TranslateGemma 4B |
+| **Subtitle styling** | Font, color, bold/italic, karaoke colors — synced to player and MP4 export |
 | **GPU memory** | ASR model is unloaded from VRAM before translation starts |
 | **Quality control** | Optional back-translation + LM Studio review in batches |
-| **Player** | Dual subtitles, clickable transcript, per-word highlight sync, adjustable font sizes |
-| **Export** | Burn subtitles into MP4 via ffmpeg (CRF 18, audio copied losslessly) |
-| **Model manager** | In-app Hugging Face download UI with live progress |
+| **Player** | Dual subtitles, clickable transcript, per-word highlight sync |
+| **Export** | Burn styled subtitles into MP4 via ffmpeg (CRF 18, audio copied losslessly) |
+| **Model manager** | In-app Hugging Face download UI; optional HF token for gated models |
 
 Supported spoken languages depend on the ASR engine (Qwen supports a fixed set; Whisper is broader). Translation pairs depend on the backend — Helsinki requires a pre-trained `opus-mt-{src}-{tgt}` model for each direction.
 
@@ -36,29 +37,100 @@ https://github.com/user-attachments/assets/3b2deb8f-3903-41ce-b451-d06bd67da0cd
 
 ## How it works
 
+### User flow
+
+From opening the app to downloading a subtitled video:
+
+```mermaid
+flowchart TD
+    openApp[Open DualSub at localhost:5173] --> inputChoice{How do you add media?}
+
+    inputChoice -->|Paste link| pasteUrl[Paste YouTube URL]
+    inputChoice -->|Upload| uploadFile[Upload video or audio file]
+
+    pasteUrl --> pickLang[Select spoken language and translate-to language]
+    uploadFile --> pickLang
+
+    pickLang --> optionalAdv{Open Advanced settings?}
+
+    optionalAdv -->|Yes| pickAsr[Pick ASR engine and model]
+    optionalAdv -->|Yes| pickTrans[Pick translation backend]
+    optionalAdv -->|Yes| pickStyle[Customize subtitle style]
+    optionalAdv -->|Yes| pickQc[Optional: enable QC via LM Studio]
+    optionalAdv -->|No| useDefaults[Use defaults: Qwen + Helsinki]
+
+    pickAsr --> generate
+    pickTrans --> generate
+    pickStyle --> generate
+    pickQc --> generate
+    useDefaults --> generate[Click Generate dual subtitles]
+
+    generate --> ensureModels[Download missing HF models if needed]
+    ensureModels --> pipelineRuns[Backend pipeline runs]
+    pipelineRuns --> watch[Watch in player with karaoke highlighting]
+    watch --> exportChoice{Export burned-in MP4?}
+    exportChoice -->|Yes| burnIn[Export and download MP4]
+    exportChoice -->|No| done([Done])
+    burnIn --> done
 ```
-YouTube URL / file upload
-        │
-        ▼
-  yt-dlp (bestvideo+bestaudio) + ffmpeg ──► source.mp4 + 16 kHz mono WAV
-        │
-        ▼
-  ASR engine (Qwen3-ASR + aligner  OR  Whisper)
-        │  word-level timestamps on the source line
-        ▼
-  Cue segmentation (max chars / duration / pause gap)
-        │
-        ▼
-  asr.unload()  ──►  free GPU VRAM
-        │
-        ▼
-  Translation backend (Helsinki / Hunyuan / TranslateGemma)
-        │  batched by translate_batch_size (default 16)
-        ▼
-  Optional QC (back-translate + LM Studio, batched)
-        │
-        ▼
-  cues.json + subtitles.ass ──► web player / ffmpeg burn-in export
+
+**Typical path:** paste a YouTube link or upload a file → choose **Swedish → English** (or any pair) → click **Generate** → play → optionally **Export burned-in video**.
+
+### Pipeline (backend)
+
+What happens after you click **Generate**:
+
+```mermaid
+flowchart LR
+    subgraph ingest [1. Ingest]
+        url[YouTube URL or upload]
+        ytdlp[yt-dlp + ffmpeg]
+        media[source.mp4 + 16 kHz WAV]
+        url --> ytdlp --> media
+    end
+
+    subgraph asr [2. Transcribe]
+        engine{ASR engine}
+        qwen[Qwen3-ASR + aligner]
+        whisper[Whisper pipeline]
+        nemotron[Nemotron 3.5]
+        words[Word-level timestamps]
+        media --> engine
+        engine --> qwen --> words
+        engine --> whisper --> words
+        engine --> nemotron --> words
+    end
+
+    subgraph segment [3. Segment]
+        cues[Subtitle cues from words]
+        words --> cues
+    end
+
+    subgraph translate [4. Translate]
+        unload[Unload ASR from GPU]
+        backend{Translator}
+        helsinki[Helsinki opus-mt]
+        nllb[NLLB-200]
+        llm[Hunyuan / TranslateGemma]
+        translated[Translated cue text]
+        cues --> unload --> backend
+        backend --> helsinki --> translated
+        backend --> nllb --> translated
+        backend --> llm --> translated
+    end
+
+    subgraph output [5. Output]
+        qc{QC enabled?}
+        lmstudio[LM Studio review]
+        artifacts[cues.json + subtitles.ass]
+        player[Web player]
+        ffmpegExport[ffmpeg burn-in MP4]
+        translated --> qc
+        qc -->|Yes| lmstudio --> artifacts
+        qc -->|No| artifacts
+        artifacts --> player
+        artifacts --> ffmpegExport
+    end
 ```
 
 The **spoken language** line gets real word timings from the ASR engine. The **translated** line timings are approximated by distributing each cue's duration across its words proportionally to character length.
@@ -85,12 +157,16 @@ Alternative engine via the Hugging Face `transformers` ASR pipeline. No separate
 
 | Setting | Options |
 |---|---|
-| Presets | `openai/whisper-small`, `openai/whisper-medium`, `openai/whisper-large-v3` |
+| Presets | `openai/whisper-small`, `openai/whisper-medium`, `openai/whisper-large-v3`, `openai/whisper-large-v3-turbo` |
 | Custom model | Any Hugging Face repo id (e.g. `KBLab/kb-whisper-large`) |
 | Source language | ISO code passed to Whisper; omit / use auto for language detection |
 | Chunking | 30-second chunks for long audio |
 
-Whisper large-v3 is the default preset and offers the best accuracy at the cost of more VRAM.
+Whisper large-v3-turbo is a faster variant of large-v3 with slightly lower accuracy.
+
+### Nemotron 3.5 ASR
+
+Multilingual engine via Hugging Face `AutoModelForRNNT` (`nvidia/nemotron-3.5-asr-streaming-0.6b`). The **spoken language** you select is mapped to a Nemotron locale automatically (e.g. `sv` → `sv-SE`, `tr` → `tr-TR`). Supports 40 locales in three tiers (transcription-ready, broad-coverage, adaptation-ready).
 
 ---
 
@@ -98,9 +174,10 @@ Whisper large-v3 is the default preset and offers the best accuracy at the cost 
 
 | Backend | Model | Speed | Notes |
 |---|---|---|---|
-| **helsinki** (default) | `Helsinki-NLP/opus-mt-{src}-{tgt}` | Fast | One HF model per language direction; best for common pairs |
-| **hunyuan** | `tencent/Hy-MT2-1.8B` | Slower | Instruction-tuned LLM; works across many language pairs |
-| **translategemma** | `google/translategemma-4b-it` | Slower | Google's instruction translation model |
+| **helsinki** (default) | `Helsinki-NLP/opus-mt-{src}-{tgt}` | Fast | One HF model per language direction |
+| **nllb** | `facebook/nllb-200-*` (600M–3.3B) | Medium | Single model, 200+ languages via FLORES codes |
+| **hunyuan** | `tencent/Hy-MT2-1.8B` | Slower | Instruction-tuned LLM |
+| **translategemma** | `google/translategemma-4b-it` | Slower | Google instruction translation model |
 
 All backends translate subtitle cues in **batches** (configurable via `translate_batch_size`, default 16). Larger batches are faster on GPU but use more VRAM — reduce if you hit out-of-memory errors.
 
@@ -164,7 +241,7 @@ Only one heavy model stage runs at a time — ASR is unloaded before translation
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dualsub.git
+git clone https://github.com/g-hano/dualsub.git
 cd dualsub
 ```
 
@@ -227,16 +304,14 @@ Models are cached by Hugging Face Hub after the first download.
 
 1. Paste a **YouTube URL** or **upload** a video/audio file.
 2. Select **spoken language** and **translation language**.
-3. Expand **Advanced settings**:
-   - Choose **ASR engine**: Qwen3-ASR or Whisper.
-   - **Qwen:** pick ASR model and forced aligner.
-   - **Whisper:** pick a preset (small / medium / large) or enter a custom Hugging Face model name.
-   - Pick a **translation engine** and optionally adjust **translation batch size**.
-   - Optionally enable **quality control** and set your LM Studio URL / model name.
-   - Adjust subtitle font sizes in the player settings panel.
-4. Click **Generate dual subtitles**. Progress shows the selected model names (e.g. `Transcribing (whisper-large-v3)`, `Translating (Helsinki)`).
-5. Play the video with dual subtitles and karaoke highlighting.
-6. Click **Export burned-in video** to produce a high-quality MP4, then **Download MP4**.
+3. Expand **Advanced settings** (optional):
+   - **ASR engine:** Qwen3-ASR, Whisper, or Nemotron 3.5 (+ locale for Nemotron).
+   - **Translation:** Helsinki, NLLB-200, Hunyuan, or TranslateGemma.
+   - **Subtitle appearance:** font, colors, karaoke highlight colors (applies to player and export).
+   - **Quality control:** optional LM Studio back-translate review.
+4. Click **Generate dual subtitles**. Missing models download automatically (set an optional HF token under **Downloaded models** for gated repos).
+5. Play with dual subtitles and word-by-word karaoke highlighting.
+6. Click **Export burned-in video**, then **Download MP4**.
 
 ---
 
@@ -252,6 +327,7 @@ Prefix: `SUBTITLE_`. Can also be set in `backend/.env`.
 | `SUBTITLE_TORCH_DTYPE` | `bfloat16` | Model dtype (`bfloat16`, `float16`, `float32`) |
 | `SUBTITLE_MOCK_MODELS` | unset | Set to `1` / `true` to run with mock ASR/translation (no GPU, for UI testing) |
 | `SUBTITLE_DATA_DIR` | `backend/data` | Job artifacts and cache directory |
+| `SUBTITLE_HF_TOKEN` / `HF_TOKEN` | unset | Optional Hugging Face token for gated model downloads |
 
 ### Job-level options
 
@@ -263,11 +339,14 @@ Set via the web form or `POST /api/jobs` (`multipart/form-data`):
 | `file` | — | Uploaded media file |
 | `source_lang` | `sv` | ISO 639-1 code of spoken language |
 | `target_lang` | `en` | ISO 639-1 code of translation language |
-| `asr_engine` | `qwen` | `qwen` or `whisper` |
-| `asr_model` | `Qwen/Qwen3-ASR-1.7B` | Qwen ASR repo id (ignored when engine is whisper) |
-| `forced_aligner_model` | `Qwen/Qwen3-ForcedAligner-0.6B` | Qwen aligner repo id (ignored when engine is whisper) |
+| `asr_engine` | `qwen` | `qwen`, `whisper`, or `nemotron` |
+| `asr_model` | `Qwen/Qwen3-ASR-1.7B` | Qwen ASR repo id |
+| `forced_aligner_model` | `Qwen/Qwen3-ForcedAligner-0.6B` | Qwen aligner repo id |
 | `whisper_model` | `openai/whisper-large-v3` | Whisper preset or custom HF repo id |
-| `translator_backend` | `helsinki` | `helsinki`, `hunyuan`, or `translategemma` |
+| `nemotron_model` | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Nemotron repo id (locale derived from `source_lang`) |
+| `translator_backend` | `helsinki` | `helsinki`, `nllb`, `hunyuan`, or `translategemma` |
+| `nllb_model` | `facebook/nllb-200-distilled-600M` | NLLB checkpoint when backend is `nllb` |
+| `subtitle_style` | defaults | JSON: font, colors, bold/italic per track |
 | `translate_batch_size` | `16` | Cues per translation batch (1–128) |
 | `qc_enabled` | `false` | Enable LM Studio quality control |
 | `lmstudio_url` | `http://localhost:1234/v1` | LM Studio base URL |
@@ -287,8 +366,12 @@ Whisper supports many more languages beyond this list when given the correct ISO
 |---|---|---|
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/languages` | Supported language codes |
-| `GET` | `/api/asr-models` | Qwen, aligner, and Whisper model lists |
+| `GET` | `/api/asr-models` | Qwen, aligner, Whisper, and Nemotron model lists |
+| `GET` | `/api/translation-models` | NLLB model list |
+| `GET` | `/api/subtitle-fonts` | Available subtitle font families |
 | `GET` | `/api/models` | All registered models with download status |
+| `GET` | `/api/models/hf-auth` | HF token auth status (token value never returned) |
+| `PUT` | `/api/models/hf-auth` | Set or clear optional HF token |
 | `POST` | `/api/models/ensure-for-job` | Pre-download models required for a job config |
 | `POST` | `/api/models/{id}/download` | Start downloading a model |
 | `WS` | `/api/models/{id}/download/progress` | Live download progress |
@@ -328,11 +411,11 @@ dualsub/
 │   │   ├── model_downloads.py   # HF model registry & downloads
 │   │   └── pipeline/
 │   │       ├── ingest.py        # yt-dlp download, ffmpeg audio extract
-│   │       ├── asr.py           # Qwen + Whisper transcription, GPU unload
+│   │       ├── asr.py           # Qwen, Whisper, Nemotron ASR; GPU unload
 │   │       ├── segment.py       # Word → subtitle cue segmentation
-│   │       ├── translate.py     # Helsinki / Hunyuan / TranslateGemma
+│   │       ├── translate.py     # Helsinki / NLLB / Hunyuan / TranslateGemma
 │   │       ├── qc.py            # Optional LM Studio quality check
-│   │       └── subtitles.py     # ASS generation, ffmpeg burn-in
+│   │       └── subtitles.py     # Styled ASS generation, ffmpeg burn-in
 │   ├── data/jobs/               # Per-job artifacts (gitignored)
 │   ├── pyproject.toml
 │   └── requirements.txt
@@ -343,9 +426,9 @@ dualsub/
 │       ├── components/
 │       │   ├── JobForm.tsx      # Job creation form
 │       │   ├── Player.tsx       # Video player + subtitle overlay
-│       │   └── ModelsModal.tsx  # Model download manager
+│       │   └── ModelsModal.tsx  # Model download manager + HF token
 │       └── hooks/
-│           └── useSubtitleFontSettings.ts
+│           └── useSubtitleStyleSettings.ts
 ├── assets/
 └── README.md
 ```

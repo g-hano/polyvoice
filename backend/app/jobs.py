@@ -115,7 +115,11 @@ class JobManager:
             asr.unload()
 
             self._update(job, JobStatus.translating, 0.6, "Translating")
-            translator = translate.get_translator(cfg.translator_backend)
+            translator = translate.get_translator(
+                cfg.translator_backend,
+                nllb_model=cfg.nllb_model,
+                hunyuan_model=cfg.hunyuan_model,
+            )
             source_texts = [s.text for s in segments]
             translations = translator.translate(
                 source_texts, src, tgt, batch_size=cfg.translate_batch_size
@@ -128,7 +132,7 @@ class JobManager:
             self._update(job, JobStatus.building, 0.9, "Writing subtitles")
             cues = subtitles.build_cues(segments, translations)
             job.cues = cues
-            subtitles.write_artifacts(cues, job_dir)
+            subtitles.write_artifacts(cues, job_dir, cfg.subtitle_style)
 
             self._update(job, JobStatus.done, 1.0, "Complete")
             self._persist(job)
@@ -144,14 +148,19 @@ class JobManager:
         )
 
     # ---- export -------------------------------------------------------
-    def export(self, job: Job) -> Path:
+    def export(self, job: Job, subtitle_style=None) -> Path:
         job_dir = self.job_dir(job.id)
         media = job_dir / (job.media_filename or "")
         ass = job_dir / "subtitles.ass"
         if not media.exists():
             raise FileNotFoundError("Source media not available for export.")
-        if not ass.exists():
+        cues = self.load_cues(job.id)
+        if not cues:
             raise FileNotFoundError("Subtitles not generated yet.")
+        style = subtitle_style if subtitle_style is not None else job.config.subtitle_style
+        ass.write_text(
+            subtitles.build_ass(cues, style), encoding="utf-8"
+        )
         out = job_dir / "export.mp4"
         subtitles.burn_in(media, ass, out)
         job.export_filename = out.name
