@@ -456,3 +456,28 @@ def get_translator(
             else:
                 raise ValueError(f"Unknown translator backend: {backend}")
         return _INSTANCES[cache_key]
+
+
+def unload() -> None:
+    """Release cached translator models from GPU memory."""
+    import gc
+
+    with _INSTANCES_LOCK:
+        for inst in _INSTANCES.values():
+            model = getattr(inst, "_model", None)
+            if model is not None:
+                del inst._model
+                inst._model = None
+            tok = getattr(inst, "_tokenizer", None)
+            if tok is not None:
+                del inst._tokenizer
+                inst._tokenizer = None
+        _INSTANCES.clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass

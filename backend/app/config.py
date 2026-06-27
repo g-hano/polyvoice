@@ -209,6 +209,111 @@ NLLB_MODELS: list[dict[str, str]] = [
     {"repo_id": "facebook/nllb-200-3.3B", "label": "NLLB 3.3B (best quality, heavy VRAM)"},
 ]
 
+# Qwen3-TTS (shared tokenizer + synthesis models).
+QWEN_TTS_TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+
+QWEN_TTS_MODELS: list[dict[str, str]] = [
+    {
+        "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        "label": "Qwen3 TTS 1.7B CustomVoice",
+        "kind": "custom_voice",
+    },
+    {
+        "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        "label": "Qwen3 TTS 0.6B CustomVoice",
+        "kind": "custom_voice",
+    },
+    {
+        "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "label": "Qwen3 TTS 1.7B VoiceDesign",
+        "kind": "voice_design",
+    },
+    {
+        "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "label": "Qwen3 TTS 1.7B Base (voice clone)",
+        "kind": "voice_clone",
+    },
+    {
+        "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        "label": "Qwen3 TTS 0.6B Base (voice clone)",
+        "kind": "voice_clone",
+    },
+]
+
+QWEN_TTS_SPEAKERS: list[dict[str, str]] = [
+    {"id": "Vivian", "label": "Vivian (Chinese, bright female)"},
+    {"id": "Serena", "label": "Serena (Chinese, warm female)"},
+    {"id": "Uncle_Fu", "label": "Uncle Fu (Chinese, mellow male)"},
+    {"id": "Dylan", "label": "Dylan (Beijing dialect male)"},
+    {"id": "Eric", "label": "Eric (Sichuan dialect male)"},
+    {"id": "Ryan", "label": "Ryan (English, dynamic male)"},
+    {"id": "Aiden", "label": "Aiden (English, sunny male)"},
+    {"id": "Ono_Anna", "label": "Ono Anna (Japanese, playful female)"},
+    {"id": "Sohee", "label": "Sohee (Korean, warm female)"},
+]
+
+# ISO target lang → Kokoro pipeline lang_code (misaki).
+KOKORO_LANG_CODES: dict[str, str] = {
+    "en": "a",
+    "ja": "j",
+    "zh": "z",
+    "es": "e",
+    "fr": "f",
+    "hi": "h",
+    "it": "i",
+    "pt": "p",
+}
+
+KOKORO_VOICES: list[dict[str, str]] = [
+    {"id": "af_heart", "label": "af_heart (American English, female)"},
+    {"id": "af_bella", "label": "af_bella (American English, female)"},
+    {"id": "af_nicole", "label": "af_nicole (American English, female)"},
+    {"id": "af_sarah", "label": "af_sarah (American English, female)"},
+    {"id": "am_michael", "label": "am_michael (American English, male)"},
+    {"id": "am_fenrir", "label": "am_fenrir (American English, male)"},
+    {"id": "bf_emma", "label": "bf_emma (British English, female)"},
+    {"id": "bm_george", "label": "bm_george (British English, male)"},
+    {"id": "jf_alpha", "label": "jf_alpha (Japanese, female)"},
+    {"id": "jm_kumo", "label": "jm_kumo (Japanese, male)"},
+    {"id": "zf_xiaoxiao", "label": "zf_xiaoxiao (Mandarin, female)"},
+    {"id": "zm_yunxi", "label": "zm_yunxi (Mandarin, male)"},
+    {"id": "ef_dora", "label": "ef_dora (Spanish, female)"},
+    {"id": "em_alex", "label": "em_alex (Spanish, male)"},
+    {"id": "ff_siwis", "label": "ff_siwis (French, female)"},
+    {"id": "if_sara", "label": "if_sara (Italian, female)"},
+    {"id": "pf_dora", "label": "pf_dora (Portuguese, female)"},
+]
+
+VOXCPM_MODEL = "openbmb/VoxCPM2"
+OMNIVOICE_MODEL = "k2-fsa/OmniVoice"
+
+# Qwen3-TTS supported synthesis languages (full names for the API).
+QWEN_TTS_LANGUAGE_NAMES: dict[str, str] = {
+    "zh": "Chinese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "de": "German",
+    "fr": "French",
+    "ru": "Russian",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "it": "Italian",
+}
+
+
+def qwen_tts_language(iso: str) -> str:
+    """Map ISO code to Qwen3-TTS language name."""
+    if not iso:
+        return "Auto"
+    return QWEN_TTS_LANGUAGE_NAMES.get(iso.lower(), language_name(iso) or iso)
+
+
+def is_qwen_voice_clone_model(model_id: str) -> bool:
+    """True for Qwen3-TTS Base models that use generate_voice_clone."""
+    return "-Base" in model_id
+
+
 SUBTITLE_FONT_FAMILIES: list[str] = [
     "Arial",
     "Verdana",
@@ -269,6 +374,19 @@ class PipelineConfig(BaseModel):
     max_cue_chars: int = 84
     max_cue_duration: float = 6.0
     pause_gap: float = 0.6
+
+    # Dubbing / TTS
+    job_mode: Literal["subtitle", "dub"] = "subtitle"
+    tts_backend: Literal["kokoro", "qwen", "voxcpm", "omnivoice", "higgs"] = "qwen"
+    tts_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    voice_mode: Literal["clone_video", "clone_upload", "preset"] = "clone_video"
+    voice_id: str = "Ryan"
+    voice_design_instruct: str = ""
+    voice_instruct: str = ""
+    ref_text: str = ""
+    voice_clone_x_vector_only: bool = False
+    higgs_server_url: str = "http://localhost:8000"
+    keep_background: bool = True
 
     def helsinki_model(self, src: str, tgt: str) -> str:
         from .helsinki_models import resolve_helsinki_repo

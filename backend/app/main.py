@@ -19,9 +19,13 @@ from .config import (
     ASR_MODELS,
     FORCED_ALIGNER_MODELS,
     HUNYUAN_MODELS,
+    KOKORO_VOICES,
     LANGUAGE_NAMES,
     NEMOTRON_MODELS,
     NLLB_MODELS,
+    QWEN_TTS_MODELS,
+    QWEN_TTS_SPEAKERS,
+    QWEN_TTS_TOKENIZER,
     SUBTITLE_FONT_FAMILIES,
     WHISPER_MODELS,
     PipelineConfig,
@@ -29,6 +33,7 @@ from .config import (
     nemotron_locale,
     nemotron_tier,
     settings,
+    is_qwen_voice_clone_model,
 )
 from .jobs import manager
 from .logging_config import setup_logging, suppress_hf_progress_bars
@@ -114,6 +119,9 @@ class EnsureJobModelsRequest(BaseModel):
     nemotron_model: str = "nvidia/nemotron-3.5-asr-streaming-0.6b"
     nllb_model: str = "facebook/nllb-200-distilled-600M"
     hunyuan_model: str = "tencent/HY-MT1.5-1.8B"
+    job_mode: str = "subtitle"
+    tts_backend: str = "qwen"
+    tts_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
 
 @app.post("/api/models/ensure-for-job")
@@ -131,6 +139,9 @@ def ensure_job_models(body: EnsureJobModelsRequest) -> dict:
             nemotron_model=body.nemotron_model,
             nllb_model=body.nllb_model,
             hunyuan_model=body.hunyuan_model,
+            job_mode=body.job_mode,
+            tts_backend=body.tts_backend,
+            tts_model=body.tts_model,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -219,6 +230,59 @@ def subtitle_fonts() -> dict:
     return {"fonts": SUBTITLE_FONT_FAMILIES}
 
 
+@app.get("/api/tts-models")
+def tts_models() -> dict:
+    return {
+        "tokenizer": QWEN_TTS_TOKENIZER,
+        "qwen_models": QWEN_TTS_MODELS,
+        "qwen_speakers": QWEN_TTS_SPEAKERS,
+        "kokoro_voices": KOKORO_VOICES,
+        "backends": [
+            {
+                "id": "qwen",
+                "label": "Qwen3-TTS",
+                "supports_clone": True,
+                "supports_preset": True,
+                "requires_ref_text": False,
+                "requires_voice_design": False,
+                "clone_models": ["voice_clone"],
+            },
+            {
+                "id": "kokoro",
+                "label": "Kokoro",
+                "supports_clone": False,
+                "supports_preset": True,
+                "requires_ref_text": False,
+                "requires_voice_design": False,
+            },
+            {
+                "id": "voxcpm",
+                "label": "VoxCPM2",
+                "supports_clone": True,
+                "supports_preset": True,
+                "requires_ref_text": False,
+                "requires_voice_design": False,
+            },
+            {
+                "id": "omnivoice",
+                "label": "OmniVoice",
+                "supports_clone": True,
+                "supports_preset": False,
+                "requires_ref_text": True,
+                "requires_voice_design": False,
+            },
+            {
+                "id": "higgs",
+                "label": "Higgs TTS (external server)",
+                "supports_clone": True,
+                "supports_preset": False,
+                "requires_ref_text": True,
+                "requires_voice_design": False,
+            },
+        ],
+    }
+
+
 def _parse_subtitle_style(raw: Optional[str]) -> SubtitleStyleConfig:
     if not raw:
         return SubtitleStyleConfig()
@@ -233,6 +297,7 @@ async def create_job(
     source_url: Optional[str] = Form(None),
     source_lang: str = Form("sv"),
     target_lang: str = Form("en"),
+    job_mode: str = Form("subtitle"),
     asr_engine: str = Form("qwen"),
     asr_model: str = Form("Qwen/Qwen3-ASR-1.7B"),
     forced_aligner_model: str = Form("Qwen/Qwen3-ForcedAligner-0.6B"),
@@ -246,7 +311,18 @@ async def create_job(
     lmstudio_url: str = Form("http://localhost:1234/v1"),
     lmstudio_model: str = Form("local-model"),
     subtitle_style: Optional[str] = Form(None),
+    tts_backend: str = Form("qwen"),
+    tts_model: str = Form("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+    voice_mode: str = Form("preset"),
+    voice_id: str = Form("Ryan"),
+    voice_design_instruct: str = Form(""),
+    voice_instruct: str = Form(""),
+    ref_text: str = Form(""),
+    voice_clone_x_vector_only: bool = Form(False),
+    higgs_server_url: str = Form("http://localhost:8000"),
+    keep_background: bool = Form(True),
     file: Optional[UploadFile] = File(None),
+    ref_audio: Optional[UploadFile] = File(None),
 ) -> dict:
     if not source_url and file is None:
         raise HTTPException(400, "Provide either source_url or an uploaded file.")
@@ -266,12 +342,38 @@ async def create_job(
         "nemotron": nemotron_model,
     }.get(asr_engine, asr_model)
 
+    if job_mode == "dub" and tts_backend in ("omnivoice", "higgs") and voice_mode == "clone_upload":
+        if ref_audio is None:
+            raise HTTPException(400, "ref_audio is required for uploaded voice cloning.")
+        if not ref_text.strip():
+            raise HTTPException(400, "ref_text is required when uploading reference audio.")
+
+    if job_mode == "dub" and tts_backend == "qwen" and is_qwen_voice_clone_model(tts_model):
+        if voice_mode == "clone_upload":
+            if ref_audio is None:
+                raise HTTPException(400, "ref_audio is required for uploaded Qwen voice cloning.")
+            if not voice_clone_x_vector_only and not ref_text.strip():
+                raise HTTPException(
+                    400,
+                    "ref_text is required for Qwen voice clone uploads unless x_vector_only mode is enabled.",
+                )
+        elif voice_mode != "clone_video":
+            raise HTTPException(
+                400,
+                "Qwen Base voice clone requires clone_video or clone_upload voice mode.",
+            )
+
+    if job_mode == "dub" and tts_backend == "qwen" and "VoiceDesign" in tts_model:
+        if not voice_design_instruct.strip():
+            raise HTTPException(400, "voice_design_instruct is required for Qwen VoiceDesign.")
+
     logger.info(
-        "Creating job: source_url=%s file=%s lang=%s->%s engine=%s asr=%s",
+        "Creating job: source_url=%s file=%s lang=%s->%s mode=%s engine=%s asr=%s",
         source_url or "(none)",
         file.filename if file else "(none)",
         source_lang,
         target_lang,
+        job_mode,
         asr_engine,
         asr_label,
     )
@@ -279,6 +381,7 @@ async def create_job(
     config = PipelineConfig(
         source_lang=source_lang,
         target_lang=target_lang,
+        job_mode=job_mode,  # type: ignore[arg-type]
         asr_engine=asr_engine,  # type: ignore[arg-type]
         asr_model=asr_model,
         forced_aligner_model=forced_aligner_model,
@@ -292,11 +395,22 @@ async def create_job(
         lmstudio_url=lmstudio_url,
         lmstudio_model=lmstudio_model,
         subtitle_style=_parse_subtitle_style(subtitle_style),
+        tts_backend=tts_backend,  # type: ignore[arg-type]
+        tts_model=tts_model,
+        voice_mode=voice_mode,  # type: ignore[arg-type]
+        voice_id=voice_id,
+        voice_design_instruct=voice_design_instruct,
+        voice_instruct=voice_instruct,
+        ref_text=ref_text,
+        voice_clone_x_vector_only=voice_clone_x_vector_only,
+        higgs_server_url=higgs_server_url,
+        keep_background=keep_background,
     )
     job = manager.create_job(config, source_url=source_url or None)
 
     upload_path: Optional[Path] = None
     upload_name: Optional[str] = None
+    ref_audio_path: Optional[Path] = None
     if file is not None:
         upload_name = file.filename
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "").suffix)
@@ -304,7 +418,13 @@ async def create_job(
             shutil.copyfileobj(file.file, tmp)
         upload_path = Path(tmp.name)
 
-    manager.start(job, upload_path=upload_path, upload_name=upload_name)
+    if ref_audio is not None:
+        tmp_ref = tempfile.NamedTemporaryFile(delete=False, suffix=Path(ref_audio.filename or ".wav").suffix)
+        with tmp_ref:
+            shutil.copyfileobj(ref_audio.file, tmp_ref)
+        ref_audio_path = Path(tmp_ref.name)
+
+    manager.start(job, upload_path=upload_path, upload_name=upload_name, ref_audio_path=ref_audio_path)
     logger.info("Job %s started (status=%s)", job.id, job.status.value)
     return {"job_id": job.id, "status": job.status.value}
 
@@ -322,6 +442,7 @@ def get_job(job_id: str) -> dict:
         "error": job.error,
         "media_filename": job.media_filename,
         "export_filename": job.export_filename,
+        "dub_filename": job.dub_filename,
         "config": job.config.model_dump(),
     }
 
@@ -340,7 +461,7 @@ def get_media(job_id: str):
     job = manager.get_job(job_id)
     if not job or not job.media_filename:
         raise HTTPException(404, "Media not found")
-    path = manager.job_dir(job_id) / job.media_filename
+    path = manager.media_path(job)
     if not path.exists():
         raise HTTPException(404, "Media file missing")
     return FileResponse(path)
@@ -348,6 +469,7 @@ def get_media(job_id: str):
 
 class ExportJobRequest(BaseModel):
     subtitle_style: Optional[dict] = None
+    include_subtitles: bool = False
 
 
 @app.post("/api/jobs/{job_id}/export")
@@ -356,10 +478,17 @@ def export_job(job_id: str, body: Optional[ExportJobRequest] = None) -> dict:
     if not job:
         raise HTTPException(404, "Job not found")
     style_override = None
-    if body and body.subtitle_style:
-        style_override = SubtitleStyleConfig.model_validate(body.subtitle_style)
+    include_subtitles = False
+    if body:
+        if body.subtitle_style:
+            style_override = SubtitleStyleConfig.model_validate(body.subtitle_style)
+        include_subtitles = body.include_subtitles
     try:
-        out = manager.export(job, subtitle_style=style_override)
+        out = manager.export(
+            job,
+            subtitle_style=style_override,
+            include_subtitles=include_subtitles,
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, str(exc))
     return {"export_filename": out.name}

@@ -28,6 +28,11 @@ class Cue(BaseModel):
     target: Line
 
 
+class JobMode(str, Enum):
+    subtitle = "subtitle"
+    dub = "dub"
+
+
 class JobStatus(str, Enum):
     pending = "pending"
     downloading = "downloading"
@@ -37,6 +42,9 @@ class JobStatus(str, Enum):
     translating = "translating"
     quality_check = "quality_check"
     building = "building"
+    synthesizing = "synthesizing"
+    separating = "separating"
+    mixing = "mixing"
     done = "done"
     error = "error"
 
@@ -59,3 +67,4 @@ class Job(BaseModel):
     error: Optional[str] = None
     cues: List[Cue] = []
     export_filename: Optional[str] = None
+    dub_filename: Optional[str] = None

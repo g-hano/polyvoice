@@ -1,6 +1,6 @@
 # DualSub
 
-**Local dual-subtitle pipeline for video and audio.** Transcribe speech with **Qwen3-ASR**, **Whisper**, or **Nemotron 3.5**, translate with Helsinki-NLP, **NLLB-200**, or optional LLM backends, optionally refine translations via LM Studio, and play the result in a web player with **two subtitle tracks** and **live word-by-word karaoke highlighting**. Customize subtitle colors and fonts in the player and export. Export a high-quality burned-in MP4 when you are done.
+**Local dual-subtitle and dubbing pipeline for video and audio.** Transcribe speech with **Qwen3-ASR**, **Whisper**, or **Nemotron 3.5**, translate with Helsinki-NLP, **NLLB-200**, or optional LLM backends, optionally refine translations via LM Studio, and play the result in a web player with **two subtitle tracks** and **live word-by-word karaoke highlighting**. **Dubbing mode** synthesizes translated speech with Qwen3-TTS, Kokoro, VoxCPM2, OmniVoice, or an external Higgs TTS server, keeps background music via Demucs separation, and muxes dubbed audio into the video. Customize subtitle colors and fonts in the player and export. Export a high-quality burned-in MP4 when you are done.
 
 Everything runs on your machine — no cloud API keys required for the core workflow.
 
@@ -19,6 +19,7 @@ Everything runs on your machine — no cloud API keys required for the core work
 | **Quality control** | Optional back-translation + LM Studio review in batches |
 | **Player** | Dual subtitles, clickable transcript, per-word highlight sync |
 | **Export** | Burn styled subtitles into MP4 via ffmpeg (CRF 18, audio copied losslessly) |
+| **Dubbing** | TTS per cue (Qwen3-TTS, Kokoro, VoxCPM2, OmniVoice, Higgs server); Demucs background keep; preview subtitles |
 | **Model manager** | In-app Hugging Face download UI; optional HF token for gated models |
 
 Supported spoken languages depend on the ASR engine (Qwen supports a fixed set; Whisper is broader). Translation pairs depend on the backend — Helsinki requires a pre-trained `opus-mt-{src}-{tgt}` model for each direction.
@@ -222,6 +223,9 @@ The source video in the player is the original downloaded/uploaded file; only th
 | **[Deno](https://docs.deno.com/runtime/getting_started/installation/)** | Required for YouTube downloads via yt-dlp (JS challenge solving) |
 | **GPU** | NVIDIA CUDA strongly recommended (ASR + translation models are heavy) |
 | **LM Studio** | Optional — local LLM server for translation quality control |
+| **espeak-ng** | Required for Kokoro TTS (must be on `PATH`) |
+| **Higgs TTS server** | Optional — run SGLang-Omni or vLLM-Omni locally for Higgs dubbing |
+| **OmniVoice** | Optional — install separately: `pip install omnivoice` (voice cloning TTS) |
 
 ### VRAM guidance (approximate)
 
@@ -231,8 +235,10 @@ The source video in the player is the original downloaded/uploaded file; only th
 | Whisper large-v3 | ~3–5 GB |
 | Helsinki opus-mt | ~0.5 GB |
 | Hunyuan / TranslateGemma | ~4–8 GB |
+| Qwen3-TTS 1.7B CustomVoice | ~4–6 GB |
+| VoxCPM2 | ~4–8 GB |
 
-Only one heavy model stage runs at a time — ASR is unloaded before translation loads.
+Only one heavy model stage runs at a time — ASR is unloaded before translation loads; translation is unloaded before TTS in dub mode.
 
 ---
 

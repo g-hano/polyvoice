@@ -29,6 +29,9 @@ const STATUS_LABEL: Record<string, string> = {
   translating: "Translating",
   quality_check: "Quality check (LM Studio)",
   building: "Writing subtitles",
+  synthesizing: "Synthesizing speech",
+  separating: "Separating background",
+  mixing: "Mixing dubbed audio",
   done: "Done",
   error: "Error",
 };
@@ -67,6 +70,9 @@ function statusLabel(
   if (status === "translating" && params) {
     return `Translating (${translatorModelName(params, jobRepos)})`;
   }
+  if (status === "synthesizing" && params?.jobMode === "dub") {
+    return `Synthesizing (${params.ttsModel})`;
+  }
   return STATUS_LABEL[status] ?? status;
 }
 
@@ -78,6 +84,7 @@ export default function App() {
   const [cues, setCues] = useState<Cue[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportingSubs, setExportingSubs] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsWatchIds, setModelsWatchIds] = useState<string[]>([]);
@@ -156,19 +163,23 @@ export default function App() {
     if (exportReady) setExportReady(false);
   }, [styleSettings]);
 
-  const handleExport = async () => {
+  const handleExport = async (includeSubtitles = false) => {
     if (!jobId) return;
-    setExporting(true);
+    if (includeSubtitles) setExportingSubs(true);
+    else setExporting(true);
     setError(null);
     try {
-      await requestExport(jobId, styleSettings);
+      await requestExport(jobId, styleSettings, includeSubtitles);
       setExportReady(true);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setExporting(false);
+      setExportingSubs(false);
     }
   };
+
+  const isDubJob = jobParams?.jobMode === "dub";
 
   const sourceLabel =
     (jobParams && languages[jobParams.sourceLang]) || jobParams?.sourceLang || "Source";
@@ -183,7 +194,7 @@ export default function App() {
             DualSub
           </h1>
           <p className="mt-2 text-white/60">
-            Transcribe, translate, and watch with both languages and live word
+            Transcribe, translate, dub, and watch with dual-language subtitles and live word
             highlighting.
           </p>
         </div>
@@ -247,14 +258,33 @@ export default function App() {
                   embedded
                 />
               </CollapsibleSection>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleExport}
-                  disabled={exporting}
-                  className="rounded-lg border border-white/15 bg-panel px-4 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-40"
-                >
-                  {exporting ? "Burning subtitles..." : "Export burned-in video"}
-                </button>
+              <div className="flex flex-wrap items-center gap-3">
+                {isDubJob ? (
+                  <>
+                    <button
+                      onClick={() => handleExport(false)}
+                      disabled={exporting || exportingSubs}
+                      className="rounded-lg border border-white/15 bg-panel px-4 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-40"
+                    >
+                      {exporting ? "Preparing..." : "Download dubbed video"}
+                    </button>
+                    <button
+                      onClick={() => handleExport(true)}
+                      disabled={exporting || exportingSubs}
+                      className="rounded-lg border border-white/15 bg-panel px-4 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-40"
+                    >
+                      {exportingSubs ? "Burning subtitles..." : "Download dubbed + subtitles"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => handleExport(false)}
+                    disabled={exporting}
+                    className="rounded-lg border border-white/15 bg-panel px-4 py-2 text-sm font-medium hover:bg-white/5 disabled:opacity-40"
+                  >
+                    {exporting ? "Burning subtitles..." : "Export burned-in video"}
+                  </button>
+                )}
                 {exportReady && (
                   <a
                     href={exportDownloadUrl(jobId)}

@@ -8,6 +8,7 @@ import type {
   ModelProgressEvent,
   ProgressEvent,
   SubtitleStyleSettings,
+  TtsModelsResponse,
 } from "./types";
 
 const API = "/api";
@@ -76,6 +77,9 @@ export async function ensureJobModels(
       hunyuan_model: params.hunyuanModel,
       translator_backend: params.translatorBackend,
       qc_enabled: params.qcEnabled,
+      job_mode: params.jobMode,
+      tts_backend: params.ttsBackend,
+      tts_model: params.ttsModel,
     }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
@@ -105,6 +109,7 @@ export async function createJob(params: CreateJobParams): Promise<{ job_id: stri
   if (params.file) form.append("file", params.file);
   form.append("source_lang", params.sourceLang);
   form.append("target_lang", params.targetLang);
+  form.append("job_mode", params.jobMode);
   form.append("asr_engine", params.asrEngine);
   form.append("asr_model", params.asrModel);
   form.append("forced_aligner_model", params.forcedAlignerModel);
@@ -118,6 +123,17 @@ export async function createJob(params: CreateJobParams): Promise<{ job_id: stri
   form.append("lmstudio_url", params.lmstudioUrl);
   form.append("lmstudio_model", params.lmstudioModel);
   form.append("subtitle_style", JSON.stringify(params.subtitleStyle));
+  form.append("tts_backend", params.ttsBackend);
+  form.append("tts_model", params.ttsModel);
+  form.append("voice_mode", params.voiceMode);
+  form.append("voice_id", params.voiceId);
+  form.append("voice_design_instruct", params.voiceDesignInstruct);
+  form.append("voice_instruct", params.voiceInstruct);
+  form.append("ref_text", params.refText);
+  form.append("voice_clone_x_vector_only", params.voiceCloneXVectorOnly ? "true" : "false");
+  form.append("higgs_server_url", params.higgsServerUrl);
+  form.append("keep_background", params.keepBackground ? "true" : "false");
+  if (params.refAudioFile) form.append("ref_audio", params.refAudioFile);
 
   const res = await apiFetch(`${API}/jobs`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await readApiError(res));
@@ -169,6 +185,12 @@ export async function getTranslationModels(): Promise<{
   return res.json();
 }
 
+export async function getTtsModels(): Promise<TtsModelsResponse> {
+  const res = await apiFetch(`${API}/tts-models`);
+  if (!res.ok) throw new Error("Failed to load TTS models");
+  return res.json();
+}
+
 export async function getSubtitleFonts(): Promise<string[]> {
   const res = await apiFetch(`${API}/subtitle-fonts`);
   if (!res.ok) return ["Arial", "Verdana", "Georgia"];
@@ -194,14 +216,16 @@ export async function setHfToken(token: string | null): Promise<HfAuthStatus> {
 
 export async function requestExport(
   jobId: string,
-  subtitleStyle?: SubtitleStyleSettings
+  subtitleStyle?: SubtitleStyleSettings,
+  includeSubtitles = false
 ): Promise<{ export_filename: string }> {
   const res = await apiFetch(`${API}/jobs/${jobId}/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(
-      subtitleStyle ? { subtitle_style: subtitleStyle } : {}
-    ),
+    body: JSON.stringify({
+      ...(subtitleStyle ? { subtitle_style: subtitleStyle } : {}),
+      include_subtitles: includeSubtitles,
+    }),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
