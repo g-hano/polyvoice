@@ -3,7 +3,12 @@ import type { SubtitleStyleSettings, TrackStyle } from "../types";
 
 export type { SubtitleStyleSettings, TrackStyle };
 
-const STORAGE_KEY = "subtitle-style-settings";
+const STORAGE_KEY = "subtitle-style-settings-v2";
+const LEGACY_STORAGE_KEYS = ["subtitle-style-settings", "subtitle-font-settings"] as const;
+
+/** Previous factory defaults — still present in many browsers' localStorage. */
+const LEGACY_DEFAULT_FONT_SIZE = 20;
+const LEGACY_DEFAULT_BACKGROUND = 0.55;
 
 export const DEFAULT_TRACK: TrackStyle = {
   font_family: "Arial",
@@ -35,18 +40,81 @@ function clampOpacity(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
-function loadSettings(): SubtitleStyleSettings {
+function isLegacyDefaultSize(size: number | undefined): boolean {
+  return size === LEGACY_DEFAULT_FONT_SIZE;
+}
+
+function isLegacyDefaultBackground(opacity: number | undefined): boolean {
+  return opacity !== undefined && Math.abs(opacity - LEGACY_DEFAULT_BACKGROUND) < 0.001;
+}
+
+function normalizeTrack(
+  track: Partial<TrackStyle> | undefined,
+  defaults: TrackStyle
+): TrackStyle {
+  const merged: TrackStyle = { ...defaults, ...track };
+  if (isLegacyDefaultSize(track?.font_size)) merged.font_size = defaults.font_size;
+  if (isLegacyDefaultBackground(track?.background_opacity)) {
+    merged.background_opacity = defaults.background_opacity;
+  }
+  return {
+    ...merged,
+    font_size: clampSize(merged.font_size),
+    background_opacity: clampOpacity(merged.background_opacity),
+  };
+}
+
+function parseStoredSettings(raw: string): SubtitleStyleSettings | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_SUBTITLE_STYLE;
-    const parsed = JSON.parse(raw) as Partial<SubtitleStyleSettings>;
+    const parsed = JSON.parse(raw) as Partial<SubtitleStyleSettings> & {
+      sourceFontSize?: number;
+      targetFontSize?: number;
+    };
+    if ("sourceFontSize" in parsed || "targetFontSize" in parsed) {
+      return {
+        source: normalizeTrack(
+          {
+            font_size: parsed.sourceFontSize,
+            background_opacity: LEGACY_DEFAULT_BACKGROUND,
+          },
+          DEFAULT_SUBTITLE_STYLE.source
+        ),
+        target: normalizeTrack(
+          {
+            font_size: parsed.targetFontSize,
+            background_opacity: LEGACY_DEFAULT_BACKGROUND,
+          },
+          DEFAULT_SUBTITLE_STYLE.target
+        ),
+      };
+    }
     return {
-      source: { ...DEFAULT_SUBTITLE_STYLE.source, ...parsed.source },
-      target: { ...DEFAULT_SUBTITLE_STYLE.target, ...parsed.target },
+      source: normalizeTrack(parsed.source, DEFAULT_SUBTITLE_STYLE.source),
+      target: normalizeTrack(parsed.target, DEFAULT_SUBTITLE_STYLE.target),
     };
   } catch {
-    return DEFAULT_SUBTITLE_STYLE;
+    return null;
   }
+}
+
+function loadSettings(): SubtitleStyleSettings {
+  const current = localStorage.getItem(STORAGE_KEY);
+  if (current) {
+    const parsed = parseStoredSettings(current);
+    if (parsed) return parsed;
+  }
+
+  for (const legacyKey of LEGACY_STORAGE_KEYS) {
+    const legacy = localStorage.getItem(legacyKey);
+    if (!legacy) continue;
+    const parsed = parseStoredSettings(legacy);
+    if (parsed) {
+      localStorage.removeItem(legacyKey);
+      return parsed;
+    }
+  }
+
+  return DEFAULT_SUBTITLE_STYLE;
 }
 
 export function useSubtitleStyleSettings() {

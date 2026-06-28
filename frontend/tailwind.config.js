@@ -4,15 +4,27 @@ export default {
   theme: {
     extend: {
       colors: {
-        brand: {
-          DEFAULT: "#5b8cff",
-          dark: "#3d6bff",
+        surface: {
+          DEFAULT: "#18181b",
+          elevated: "#1f1f23",
         },
-        ink: "#0b1020",
-        panel: "#141a2e",
+        border: {
+          DEFAULT: "#27272a",
+          subtle: "#1f1f23",
+        },
+        accent: {
+          DEFAULT: "#e4e4e7",
+          hover: "#fafafa",
+          muted: "#a1a1aa",
+        },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
+      },
+      borderRadius: {
+        DEFAULT: "0.5rem",
+        lg: "0.625rem",
+        xl: "0.75rem",
       },
     },
   },
