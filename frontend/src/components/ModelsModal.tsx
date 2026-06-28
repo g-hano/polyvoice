@@ -8,6 +8,11 @@ import {
   subscribeModelProgress,
 } from "../api";
 import type { HfAuthStatus, ModelInfo, ModelProgressEvent } from "../types";
+import Alert from "./ui/Alert";
+import Badge from "./ui/Badge";
+import Button from "./ui/Button";
+import Input from "./ui/Input";
+import { IconDatabase } from "./ui/Icons";
 
 const CATEGORY_LABEL: Record<string, string> = {
   asr: "Speech recognition",
@@ -146,7 +151,6 @@ export default function ModelsModal({
     }
   };
 
-  // Re-subscribe to any in-progress downloads when modal opens
   useEffect(() => {
     if (!open) return;
     for (const m of models) {
@@ -189,66 +193,66 @@ export default function ModelsModal({
         aria-modal="true"
         aria-labelledby="models-modal-title"
       >
-        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
-          <div>
-            <h2 id="models-modal-title" className="text-xl font-bold">
-              Downloaded models
-            </h2>
-            <p className="mt-1 text-sm text-white/50">
-              Download Hugging Face models before running jobs. Progress updates live.
-            </p>
+        <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-400">
+              <IconDatabase className="h-5 w-5" />
+            </span>
+            <div>
+              <h2 id="models-modal-title" className="text-lg font-semibold text-zinc-100">
+                Model library
+              </h2>
+              <p className="mt-0.5 text-sm text-zinc-500">
+                Download Hugging Face models before running jobs
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-white/50 transition hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
             aria-label="Close"
           >
             ✕
           </button>
         </header>
 
-        <div className="border-b border-white/10 px-6 py-4">
+        <div className="border-b border-border px-6 py-4">
           <HfTokenSection />
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-6 py-3">
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={loading}
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-sm hover:bg-white/5 disabled:opacity-40"
-          >
-            {loading ? "Refreshing…" : "Refresh status"}
-          </button>
+        <div className="flex items-center justify-between gap-3 border-b border-border px-6 py-3">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
           {requiredMissing && (
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleDownloadRequired}
               disabled={anyDownloading}
-              className="rounded-lg bg-brand px-4 py-1.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
             >
-              Download required models
-            </button>
+              Download required
+            </Button>
           )}
         </div>
 
         {error && (
-          <div className="mx-6 mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200">
+          <Alert variant="error" className="mx-6 mt-4">
             {error}
-          </div>
+          </Alert>
         )}
 
         <div className="max-h-[min(60vh,520px)] overflow-y-auto px-6 py-4">
           {loading && models.length === 0 ? (
-            <p className="py-8 text-center text-white/40">Loading models…</p>
+            <p className="py-8 text-center text-sm text-zinc-500">Loading models…</p>
           ) : (
             Object.entries(grouped).map(([category, items]) => (
               <section key={category} className="mb-6 last:mb-0">
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/40">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
                   {CATEGORY_LABEL[category] ?? category}
                 </h3>
-                <ul className="space-y-3">
+                <ul className="space-y-2">
                   {items.map((model) => (
                     <ModelRow
                       key={model.id}
@@ -279,46 +283,38 @@ function ModelRow({
   const isError = model.status === "error";
 
   return (
-    <li className="rounded-xl border border-white/10 bg-ink/50 p-4">
+    <li className="rounded-xl border border-border bg-[var(--panel-bg)] p-4 transition hover:border-zinc-700">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-white">{model.label}</span>
-            {model.required && (
-              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-300">
-                Required
-              </span>
-            )}
+            <span className="font-medium text-zinc-100">{model.label}</span>
+            {model.required && <Badge variant="warning">Required</Badge>}
             <StatusBadge status={model.status} />
           </div>
-          <p className="mt-0.5 truncate text-xs text-white/40">{model.repo_id}</p>
-          <p className="mt-1 text-sm text-white/55">{model.description}</p>
-          <p className="mt-1 text-xs text-white/35">
-            Cache size: {formatBytes(model.size_on_disk)}
+          <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-600">{model.repo_id}</p>
+          <p className="mt-1.5 text-sm text-zinc-400">{model.description}</p>
+          <p className="mt-1 text-xs text-zinc-600">
+            {formatBytes(model.size_on_disk)} on disk
           </p>
         </div>
 
         {!isDownloaded && !isDownloading && (
-          <button
-            type="button"
-            onClick={onDownload}
-            className="shrink-0 rounded-lg border border-brand/50 bg-brand/15 px-3 py-1.5 text-sm font-medium text-brand hover:bg-brand/25"
-          >
+          <Button variant="outline" size="sm" onClick={onDownload} className="shrink-0">
             Download
-          </button>
+          </Button>
         )}
       </div>
 
       {(isDownloading || isDownloaded) && (
         <div className="mt-3">
-          <div className="mb-1 flex justify-between text-xs text-white/45">
+          <div className="mb-1 flex justify-between text-xs text-zinc-500">
             <span>{STATUS_LABEL[model.status] ?? model.status}</span>
-            <span>{pct}%</span>
+            <span className="font-mono">{pct}%</span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
             <div
               className={`h-full rounded-full transition-all duration-300 ${
-                isError ? "bg-red-500" : isDownloaded ? "bg-emerald-500" : "bg-brand"
+                isError ? "bg-red-500" : isDownloaded ? "bg-emerald-600" : "bg-indigo-500"
               }`}
               style={{ width: `${pct}%` }}
             />
@@ -327,13 +323,13 @@ function ModelRow({
       )}
 
       {model.message && (isDownloading || isError) && (
-        <p className="mt-2 truncate text-xs text-white/40" title={model.message}>
+        <p className="mt-2 truncate text-xs text-zinc-500" title={model.message}>
           {model.message}
         </p>
       )}
 
       {isError && model.error && (
-        <p className="mt-2 text-xs text-red-300/80 line-clamp-3" title={model.error}>
+        <p className="mt-2 text-xs text-red-400 line-clamp-3" title={model.error}>
           {model.error.split("\n")[0]}
         </p>
       )}
@@ -342,20 +338,16 @@ function ModelRow({
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    not_downloaded: "bg-white/10 text-white/50",
-    downloaded: "bg-emerald-500/20 text-emerald-300",
-    downloading: "bg-brand/20 text-brand",
-    error: "bg-red-500/20 text-red-300",
+  const variantMap: Record<string, "default" | "success" | "warning" | "error" | "info"> = {
+    not_downloaded: "default",
+    downloaded: "success",
+    downloading: "info",
+    error: "error",
   };
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-        styles[status] ?? styles.not_downloaded
-      }`}
-    >
+    <Badge variant={variantMap[status] ?? "default"}>
       {STATUS_LABEL[status] ?? status}
-    </span>
+    </Badge>
   );
 }
 
@@ -411,50 +403,39 @@ function HfTokenSection() {
     : "Not authenticated — public models only";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-ink/40 p-4">
+    <div className="rounded-xl border border-border bg-[var(--panel-bg)] p-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-white/85">Hugging Face token (optional)</p>
-        <span className="text-xs text-white/45">{statusText}</span>
+        <p className="text-sm font-medium text-zinc-200">Hugging Face token</p>
+        <span className="text-xs text-zinc-500">{statusText}</span>
       </div>
-      <p className="mb-3 text-xs text-white/40">
-        Required for gated models. Create a token at{" "}
+      <p className="mb-3 text-xs text-zinc-500">
+        Required for gated models.{" "}
         <a
           href="https://huggingface.co/settings/tokens"
           target="_blank"
           rel="noreferrer"
-          className="text-brand hover:underline"
+          className="text-indigo-400 hover:underline"
         >
-          huggingface.co/settings/tokens
+          Get a token →
         </a>
-        .
       </p>
       <div className="flex flex-wrap gap-2">
-        <input
+        <Input
           type="password"
           value={tokenInput}
           onChange={(e) => setTokenInput(e.target.value)}
           placeholder="hf_…"
           autoComplete="off"
-          className="min-w-[200px] flex-1 rounded-lg border border-white/10 bg-ink px-3 py-2 text-sm outline-none focus:border-brand"
+          className="min-w-[200px] flex-1"
         />
-        <button
-          type="button"
-          onClick={save}
-          disabled={busy || !tokenInput.trim()}
-          className="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
-        >
+        <Button variant="primary" onClick={save} disabled={busy || !tokenInput.trim()}>
           Save
-        </button>
-        <button
-          type="button"
-          onClick={clear}
-          disabled={busy || !auth?.configured}
-          className="rounded-lg border border-white/15 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40"
-        >
+        </Button>
+        <Button variant="outline" onClick={clear} disabled={busy || !auth?.configured}>
           Clear
-        </button>
+        </Button>
       </div>
-      {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
     </div>
   );
 }
