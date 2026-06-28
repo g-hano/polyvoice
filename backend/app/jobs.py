@@ -5,17 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import threading
 import traceback
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .config import PipelineConfig, settings
+from .config import PipelineConfig, is_qwen_voice_clone_model, settings
 from .models import Cue, Job, JobStatus
-from .pipeline import asr, ingest, qc, segment, subtitles, translate
+from .pipeline import asr, dub, ingest, punctuation, qc, segment, subtitles, translate
+from .pipeline import audio_mix, voice_ref
+from .pipeline.tts import unload_tts
 
 logger = logging.getLogger(__name__)
+
+CLONE_BACKENDS = frozenset({"voxcpm", "omnivoice", "higgs"})
 
 
 class JobManager:
@@ -85,13 +90,27 @@ class JobManager:
         self._emit(job)
 
     # ---- pipeline execution -------------------------------------------
-    def start(self, job: Job, upload_path: Optional[Path] = None, upload_name: Optional[str] = None) -> None:
+    def start(
+        self,
+        job: Job,
+        upload_path: Optional[Path] = None,
+        upload_name: Optional[str] = None,
+        ref_audio_path: Optional[Path] = None,
+    ) -> None:
         thread = threading.Thread(
-            target=self._run, args=(job, upload_path, upload_name), daemon=True
+            target=self._run,
+            args=(job, upload_path, upload_name, ref_audio_path),
+            daemon=True,
         )
         thread.start()
 
-    def _run(self, job: Job, upload_path: Optional[Path], upload_name: Optional[str]) -> None:
+    def _run(
+        self,
+        job: Job,
+        upload_path: Optional[Path],
+        upload_name: Optional[str],
+        ref_audio_path: Optional[Path],
+    ) -> None:
         cfg = job.config
         src, tgt = cfg.source_lang, cfg.target_lang
         job_dir = self.job_dir(job.id)
@@ -111,7 +130,6 @@ class JobManager:
             self._update(job, JobStatus.segmenting, 0.5, "Building subtitle cues")
             segments = segment.segment_words(asr_result.words, cfg)
 
-            # Free the ASR model from the GPU before loading the translator.
             asr.unload()
 
             self._update(job, JobStatus.translating, 0.6, "Translating")
@@ -129,10 +147,82 @@ class JobManager:
                 self._update(job, JobStatus.quality_check, 0.8, "Quality checking")
                 translations = qc.quality_check(source_texts, translations, src, tgt, cfg)
 
+            translations = punctuation.add_punctuation(translations)
+
             self._update(job, JobStatus.building, 0.9, "Writing subtitles")
-            cues = subtitles.build_cues(segments, translations)
+            cues = subtitles.build_cues(segments, translations, offset_sec=cfg.audio_offset_sec)
             job.cues = cues
             subtitles.write_artifacts(cues, job_dir, cfg.subtitle_style)
+
+            if cfg.job_mode == "dub":
+                translate.unload()
+
+                ref = None
+                needs_ref = (
+                    cfg.tts_backend in ("omnivoice", "higgs")
+                    or (
+                        cfg.tts_backend == "qwen"
+                        and is_qwen_voice_clone_model(cfg.tts_model)
+                    )
+                    or cfg.voice_mode in ("clone_video", "clone_upload")
+                )
+                if needs_ref:
+                    if cfg.voice_mode == "clone_upload" and ref_audio_path:
+                        dest = job_dir / "ref_upload.wav"
+                        shutil.copy2(ref_audio_path, dest)
+                        ref = voice_ref.prepare_reference(
+                            job_dir,
+                            wav,
+                            asr_result.words,
+                            voice_mode=cfg.voice_mode,
+                            ref_text=cfg.ref_text,
+                            upload_path=dest,
+                            voice_clone_x_vector_only=cfg.voice_clone_x_vector_only,
+                        )
+                    elif cfg.voice_mode == "clone_video":
+                        ref = voice_ref.prepare_reference(
+                            job_dir,
+                            wav,
+                            asr_result.words,
+                            voice_mode=cfg.voice_mode,
+                            ref_text=cfg.ref_text,
+                        )
+
+                self._update(job, JobStatus.synthesizing, 0.75, "Synthesizing speech")
+                dubbed_vocals_path = job_dir / "dubbed_vocals.wav"
+                import soundfile as sf
+
+                media_duration = float(sf.info(str(wav)).duration)
+                dub.synthesize_timeline(
+                    cues, cfg, ref, dubbed_vocals_path, media_duration=media_duration
+                )
+                unload_tts()
+
+                self._update(job, JobStatus.separating, 0.85, "Separating background audio")
+                accompaniment, _, separation_ok = audio_mix.separate_accompaniment(
+                    wav, job_dir, keep_background=cfg.keep_background
+                )
+                if not separation_ok and cfg.keep_background:
+                    job.message = (
+                        "Background separation failed; mixed with attenuated original audio"
+                    )
+
+                self._update(job, JobStatus.mixing, 0.92, "Mixing dubbed audio")
+                dubbed_audio_path = job_dir / "dubbed_audio.wav"
+                orig_samples = audio_mix.mono_sample_count(wav)
+                audio_mix.mix_dubbed(
+                    dubbed_vocals_path,
+                    accompaniment,
+                    dubbed_audio_path,
+                    original_wav=wav,
+                    background_level=cfg.background_mix_level,
+                    fallback_original_level=cfg.background_fallback_level,
+                    pad_to_samples=orig_samples,
+                )
+
+                dubbed_mp4 = job_dir / "dubbed.mp4"
+                audio_mix.mux_audio(media, dubbed_audio_path, dubbed_mp4)
+                job.dub_filename = dubbed_mp4.name
 
             self._update(job, JobStatus.done, 1.0, "Complete")
             self._persist(job)
@@ -147,20 +237,42 @@ class JobManager:
             job.model_dump_json(indent=2), encoding="utf-8"
         )
 
-    # ---- export -------------------------------------------------------
-    def export(self, job: Job, subtitle_style=None) -> Path:
+    def media_path(self, job: Job) -> Path:
         job_dir = self.job_dir(job.id)
-        media = job_dir / (job.media_filename or "")
-        ass = job_dir / "subtitles.ass"
+        if job.config.job_mode == "dub" and job.dub_filename:
+            dubbed = job_dir / job.dub_filename
+            if dubbed.exists():
+                return dubbed
+        return job_dir / (job.media_filename or "")
+
+    # ---- export -------------------------------------------------------
+    def export(
+        self,
+        job: Job,
+        subtitle_style=None,
+        *,
+        include_subtitles: bool = False,
+    ) -> Path:
+        job_dir = self.job_dir(job.id)
+        media = self.media_path(job)
         if not media.exists():
             raise FileNotFoundError("Source media not available for export.")
         cues = self.load_cues(job.id)
         if not cues:
             raise FileNotFoundError("Subtitles not generated yet.")
+
+        if job.config.job_mode == "dub" and not include_subtitles:
+            out = job_dir / "export.mp4"
+            import shutil
+
+            shutil.copy2(media, out)
+            job.export_filename = out.name
+            self._persist(job)
+            return out
+
+        ass = job_dir / "subtitles.ass"
         style = subtitle_style if subtitle_style is not None else job.config.subtitle_style
-        ass.write_text(
-            subtitles.build_ass(cues, style), encoding="utf-8"
-        )
+        ass.write_text(subtitles.build_ass(cues, style), encoding="utf-8")
         out = job_dir / "export.mp4"
         subtitles.burn_in(media, ass, out)
         job.export_filename = out.name

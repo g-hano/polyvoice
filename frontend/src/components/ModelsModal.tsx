@@ -12,6 +12,7 @@ import type { HfAuthStatus, ModelInfo, ModelProgressEvent } from "../types";
 const CATEGORY_LABEL: Record<string, string> = {
   asr: "Speech recognition",
   translation: "Translation",
+  tts: "Text-to-speech (dubbing)",
 };
 
 const STATUS_LABEL: Record<string, string> = {

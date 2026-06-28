@@ -24,3 +24,8 @@ soundfile==0.13.0
 # LM Studio / QC uses the OpenAI-compatible HTTP API
 httpx==0.28.1
 huggingface-hub>=0.26.0
+librosa>=0.11.0
+qwen-tts
+kokoro>=0.9.2
+voxcpm
+demucs>=4.0

@@ -9,15 +9,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional
 
-from huggingface_hub import HfApi, scan_cache_dir, snapshot_download, try_to_load_from_cache
-from huggingface_hub.errors import LocalEntryNotFoundError
+from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
-from .config import settings
+from .config import OMNIVOICE_MODEL, QWEN_TTS_TOKENIZER, VOXCPM_MODEL, settings
+from .model_paths import is_hf_model_available
 
 
 class ModelCategory(str, Enum):
     asr = "asr"
     translation = "translation"
+    tts = "tts"
 
 
 class DownloadStatus(str, Enum):
@@ -222,6 +223,63 @@ MODEL_REGISTRY: List[ModelEntry] = [
         category=ModelCategory.translation,
         description="Meta NLLB-200 3.3B — best quality, heavy VRAM.",
     ),
+    ModelEntry(
+        id="qwen3-tts-tokenizer",
+        repo_id=QWEN_TTS_TOKENIZER,
+        label="Qwen3 TTS Tokenizer 12Hz",
+        category=ModelCategory.tts,
+        description="Shared tokenizer for all Qwen3-TTS models.",
+        required=True,
+    ),
+    ModelEntry(
+        id="qwen3-tts-1.7b-custom",
+        repo_id="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        label="Qwen3 TTS 1.7B CustomVoice",
+        category=ModelCategory.tts,
+        description="Qwen3 preset speakers with optional style instruct.",
+    ),
+    ModelEntry(
+        id="qwen3-tts-0.6b-custom",
+        repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        label="Qwen3 TTS 0.6B CustomVoice",
+        category=ModelCategory.tts,
+        description="Smaller Qwen3 CustomVoice — less VRAM.",
+    ),
+    ModelEntry(
+        id="qwen3-tts-1.7b-design",
+        repo_id="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        label="Qwen3 TTS 1.7B VoiceDesign",
+        category=ModelCategory.tts,
+        description="Natural-language voice design for Qwen3-TTS.",
+    ),
+    ModelEntry(
+        id="qwen3-tts-1.7b-base",
+        repo_id="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        label="Qwen3 TTS 1.7B Base",
+        category=ModelCategory.tts,
+        description="Qwen3 voice clone from reference audio + transcript.",
+    ),
+    ModelEntry(
+        id="qwen3-tts-0.6b-base",
+        repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        label="Qwen3 TTS 0.6B Base",
+        category=ModelCategory.tts,
+        description="Smaller Qwen3 voice clone — less VRAM.",
+    ),
+    ModelEntry(
+        id="voxcpm2",
+        repo_id=VOXCPM_MODEL,
+        label="VoxCPM2",
+        category=ModelCategory.tts,
+        description="Multilingual TTS with voice design and cloning.",
+    ),
+    ModelEntry(
+        id="omnivoice",
+        repo_id=OMNIVOICE_MODEL,
+        label="OmniVoice",
+        category=ModelCategory.tts,
+        description="Zero-shot voice cloning TTS.",
+    ),
 ]
 
 _REGISTRY_BY_ID = {m.id: m for m in MODEL_REGISTRY}
@@ -253,6 +311,9 @@ def repos_for_job(
     nemotron_model: str = "nvidia/nemotron-3.5-asr-streaming-0.6b",
     nllb_model: str = "facebook/nllb-200-distilled-600M",
     hunyuan_model: str = "tencent/HY-MT1.5-1.8B",
+    job_mode: str = "subtitle",
+    tts_backend: str = "qwen",
+    tts_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
 ) -> List[str]:
     """Return Hugging Face repo ids required for a pipeline job."""
     if asr_engine == "whisper":
@@ -273,6 +334,16 @@ def repos_for_job(
         repos.append(hunyuan_model)
     elif translator_backend in TRANSLATOR_REPOS:
         repos.append(TRANSLATOR_REPOS[translator_backend])
+
+    if job_mode == "dub":
+        if tts_backend == "qwen":
+            repos.append(QWEN_TTS_TOKENIZER)
+            repos.append(tts_model)
+        elif tts_backend == "voxcpm":
+            repos.append(VOXCPM_MODEL)
+        elif tts_backend == "omnivoice":
+            repos.append(OMNIVOICE_MODEL)
+
     return list(dict.fromkeys(repos))
 
 
@@ -303,11 +374,7 @@ def _cache_size_bytes(repo_id: str) -> int:
 
 
 def is_model_cached(repo_id: str) -> bool:
-    try:
-        path = try_to_load_from_cache(repo_id, "config.json", repo_type="model")
-        return path is not None
-    except (LocalEntryNotFoundError, Exception):
-        return False
+    return is_hf_model_available(repo_id)
 
 
 def _make_tqdm(reporter: DownloadState, file_index: int, file_total: int):
@@ -491,6 +558,22 @@ class ModelDownloadManager:
         q: asyncio.Queue = asyncio.Queue()
         self._subscribers.setdefault(model_id, []).append(q)
         return q
+
+    def get_model_state(self, model_id: str) -> Optional[dict]:
+        try:
+            entry = self._entry(model_id)
+        except KeyError:
+            return None
+        state = self._refresh_cached_entry(entry)
+        return {
+            "model_id": model_id,
+            "repo_id": entry.repo_id,
+            "status": state.status.value,
+            "progress": round(state.progress, 3),
+            "message": state.message,
+            "error": state.error,
+            "size_on_disk": state.size_on_disk,
+        }
 
     def unsubscribe(self, model_id: str, q: asyncio.Queue) -> None:
         subs = self._subscribers.get(model_id, [])
