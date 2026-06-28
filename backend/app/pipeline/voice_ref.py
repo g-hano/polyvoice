@@ -133,6 +133,7 @@ def prepare_reference(
     voice_mode: str,
     ref_text: str,
     upload_path: Optional[Path] = None,
+    voice_clone_x_vector_only: bool = False,
 ) -> Optional[VoiceReference]:
     """Return a voice reference for cloning backends, or None for preset-only engines."""
     out = job_dir / "ref_clip.wav"
@@ -141,7 +142,7 @@ def prepare_reference(
             raise ValueError("Voice mode is clone_upload but no reference audio was provided.")
         shutil.copy2(upload_path, out)
         text = ref_text.strip()
-        if not text:
+        if not text and not voice_clone_x_vector_only:
             raise ValueError("Reference transcript (ref_text) is required for uploaded voice clips.")
         return VoiceReference(audio_path=out, text=text)
 

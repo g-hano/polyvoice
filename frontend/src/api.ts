@@ -55,10 +55,6 @@ export interface EnsureJobModelsResult {
   repos: string[];
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function ensureJobModels(
   params: CreateJobParams
 ): Promise<EnsureJobModelsResult> {
@@ -86,21 +82,37 @@ export async function ensureJobModels(
   return res.json();
 }
 
-export async function waitForModelDownloads(modelIds: string[]): Promise<void> {
-  if (modelIds.length === 0) return;
-  const pending = new Set(modelIds);
-  while (pending.size > 0) {
-    const models = await getModels();
-    for (const id of [...pending]) {
-      const model = models.find((m) => m.id === id);
-      if (!model) continue;
-      if (model.status === "downloaded") pending.delete(id);
-      if (model.status === "error") {
-        throw new Error(model.error?.split("\n")[0] ?? `Download failed: ${model.label}`);
-      }
+export function waitForModelDownloads(modelIds: string[]): Promise<void> {
+  if (modelIds.length === 0) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const pending = new Set(modelIds);
+    const cleanups: (() => void)[] = [];
+    let settled = false;
+
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanups.forEach((fn) => fn());
+      if (err) reject(err);
+      else resolve();
+    };
+
+    for (const id of modelIds) {
+      const unsub = subscribeModelProgress(id, (event) => {
+        if (!pending.has(event.model_id)) return;
+        if (event.status === "downloaded") {
+          pending.delete(event.model_id);
+          if (pending.size === 0) finish();
+        } else if (event.status === "error") {
+          finish(
+            new Error(event.error?.split("\n")[0] ?? `Download failed: ${event.model_id}`)
+          );
+        }
+      });
+      cleanups.push(unsub);
     }
-    if (pending.size > 0) await sleep(800);
-  }
+  });
 }
 
 export async function createJob(params: CreateJobParams): Promise<{ job_id: string }> {
@@ -283,7 +295,11 @@ export function subscribeModelProgress(
   );
   ws.onmessage = (msg) => {
     try {
-      onEvent(JSON.parse(msg.data));
+      const raw = JSON.parse(msg.data);
+      onEvent({
+        ...raw,
+        model_id: raw.model_id ?? raw.id ?? modelId,
+      });
     } catch {
       /* ignore malformed */
     }

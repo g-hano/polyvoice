@@ -177,6 +177,7 @@ class JobManager:
                             voice_mode=cfg.voice_mode,
                             ref_text=cfg.ref_text,
                             upload_path=dest,
+                            voice_clone_x_vector_only=cfg.voice_clone_x_vector_only,
                         )
                     elif cfg.voice_mode == "clone_video":
                         ref = voice_ref.prepare_reference(

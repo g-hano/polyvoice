@@ -208,18 +208,13 @@ export default function JobForm({
 
   const hasSource = mode === "url" ? sourceUrl.trim().length > 0 : !!file;
   const whisperValid = asrEngine !== "whisper" || whisperModel.length > 0;
+  const uploadNeedsRefText = voiceMode === "clone_upload" && !voiceCloneXVectorOnly;
   const dubValid =
     jobMode === "subtitle" ||
     ((!isVoiceDesign || voiceDesignInstruct.trim().length > 0) &&
-      (voiceMode !== "clone_upload" || !!refAudioFile) &&
-      (!isVoiceClone ||
-        voiceMode === "clone_video" ||
-        voiceCloneXVectorOnly ||
-        refText.trim().length > 0) &&
-      (ttsBackend !== "omnivoice" && ttsBackend !== "higgs" ||
-        voiceMode === "clone_video" ||
-        voiceCloneXVectorOnly ||
-        (voiceMode === "clone_upload" && refText.trim().length > 0)));
+      (voiceMode !== "clone_upload" ||
+        (!!refAudioFile && (!uploadNeedsRefText || refText.trim().length > 0))) &&
+      (!isVoiceClone || voiceMode === "clone_video" || voiceCloneXVectorOnly));
   const canSubmit = hasSource && whisperValid && dubValid;
 
   const nemotronInfo = asrEngine === "nemotron" ? nemotronByIso[sourceLang] : null;
@@ -410,7 +405,7 @@ export default function JobForm({
               </div>
               {!voiceCloneXVectorOnly && (
                 <div>
-                  <Label>Reference transcript</Label>
+                  <Label>Reference transcript (required)</Label>
                   <textarea
                     value={refText}
                     onChange={(e) => setRefText(e.target.value)}

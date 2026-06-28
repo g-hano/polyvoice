@@ -188,10 +188,9 @@ async def model_download_progress(websocket: WebSocket, model_id: str) -> None:
 
     queue = download_manager.subscribe(model_id)
     try:
-        models = download_manager.list_models()
-        current = next((m for m in models if m["id"] == model_id), None)
-        if current:
-            await websocket.send_json(current)
+        state = download_manager.get_model_state(model_id)
+        if state:
+            await websocket.send_json(state)
         while True:
             payload = await queue.get()
             await websocket.send_json(payload)
@@ -344,22 +343,19 @@ async def create_job(
         "nemotron": nemotron_model,
     }.get(asr_engine, asr_model)
 
-    if job_mode == "dub" and tts_backend in ("omnivoice", "higgs") and voice_mode == "clone_upload":
+    if job_mode == "dub" and voice_mode == "clone_upload":
         if ref_audio is None:
             raise HTTPException(400, "ref_audio is required for uploaded voice cloning.")
-        if not ref_text.strip():
+        ref_text_optional = (
+            tts_backend == "qwen"
+            and is_qwen_voice_clone_model(tts_model)
+            and voice_clone_x_vector_only
+        )
+        if not ref_text_optional and not ref_text.strip():
             raise HTTPException(400, "ref_text is required when uploading reference audio.")
 
     if job_mode == "dub" and tts_backend == "qwen" and is_qwen_voice_clone_model(tts_model):
-        if voice_mode == "clone_upload":
-            if ref_audio is None:
-                raise HTTPException(400, "ref_audio is required for uploaded Qwen voice cloning.")
-            if not voice_clone_x_vector_only and not ref_text.strip():
-                raise HTTPException(
-                    400,
-                    "ref_text is required for Qwen voice clone uploads unless x_vector_only mode is enabled.",
-                )
-        elif voice_mode != "clone_video":
+        if voice_mode not in ("clone_video", "clone_upload"):
             raise HTTPException(
                 400,
                 "Qwen Base voice clone requires clone_video or clone_upload voice mode.",

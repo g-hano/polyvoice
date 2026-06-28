@@ -559,6 +559,22 @@ class ModelDownloadManager:
         self._subscribers.setdefault(model_id, []).append(q)
         return q
 
+    def get_model_state(self, model_id: str) -> Optional[dict]:
+        try:
+            entry = self._entry(model_id)
+        except KeyError:
+            return None
+        state = self._refresh_cached_entry(entry)
+        return {
+            "model_id": model_id,
+            "repo_id": entry.repo_id,
+            "status": state.status.value,
+            "progress": round(state.progress, 3),
+            "message": state.message,
+            "error": state.error,
+            "size_on_disk": state.size_on_disk,
+        }
+
     def unsubscribe(self, model_id: str, q: asyncio.Queue) -> None:
         subs = self._subscribers.get(model_id, [])
         if q in subs:
