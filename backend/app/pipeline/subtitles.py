@@ -13,6 +13,7 @@ from ..models import Cue, Line, Word
 from .segment import Segment
 
 ASS_FONT_SCALE = 2.7
+REFERENCE_PLAY_RES_Y = 1080
 
 
 def _split_target_words(text: str) -> List[str]:
@@ -97,8 +98,67 @@ def _hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
 
 
-def _ass_font_size(px: int) -> int:
-    return max(18, round(px * ASS_FONT_SCALE))
+def _ass_font_size(px: int, play_res_y: int = REFERENCE_PLAY_RES_Y) -> int:
+    """Map preview CSS px to ASS font size, scaled to the video height."""
+    scaled = px * ASS_FONT_SCALE * play_res_y / REFERENCE_PLAY_RES_Y
+    return max(14, round(scaled))
+
+
+def _ass_outline(play_res_y: int) -> int:
+    return max(1, round(3 * play_res_y / REFERENCE_PLAY_RES_Y))
+
+
+def _ass_side_margin(play_res_x: int) -> int:
+    return max(40, int(play_res_x * 0.08))
+
+
+def _estimate_wrapped_lines(text: str, *, play_res_x: int, font_size: int, margin_lr: int) -> int:
+    """Rough line count for bottom-anchored ASS text with word wrap."""
+    plain = re.sub(r"\{[^}]*\}", "", text).replace("\\N", " ").strip()
+    if not plain:
+        return 1
+    usable = max(play_res_x - 2 * margin_lr, play_res_x // 3)
+    chars_per_line = max(10, int(usable / max(font_size * 0.55, 1)))
+    lines = 1
+    current = 0
+    for word in plain.split():
+        word_len = len(word) + (1 if current else 0)
+        if current and current + word_len > chars_per_line:
+            lines += 1
+            current = len(word)
+        else:
+            current += word_len
+    return lines
+
+
+def _line_block_height(font_size: int, line_count: int) -> int:
+    return max(font_size, int(font_size * 1.28 * line_count))
+
+
+def _stacked_pos_tags(
+    *,
+    play_res_x: int,
+    play_res_y: int,
+    source_text: str,
+    target_text: str,
+    source_font_size: int,
+    target_font_size: int,
+    margin_lr: int,
+) -> tuple[str, str]:
+    """Return \\pos tags so source sits above target, matching the web preview."""
+    bottom_pad = max(16, int(play_res_y * 0.04))
+    gap = max(6, int(play_res_y * 0.012))
+    cx = play_res_x // 2
+    target_lines = _estimate_wrapped_lines(
+        target_text, play_res_x=play_res_x, font_size=target_font_size, margin_lr=margin_lr
+    )
+    target_y = play_res_y - bottom_pad
+    target_height = _line_block_height(target_font_size, target_lines)
+    source_y = target_y - target_height - gap
+    return (
+        f"{{\\an2\\pos({cx},{source_y})}}",
+        f"{{\\an2\\pos({cx},{target_y})}}",
+    )
 
 
 def _opacity_to_ass_alpha(opacity: float) -> int:
@@ -106,17 +166,27 @@ def _opacity_to_ass_alpha(opacity: float) -> int:
     return int((1.0 - max(0.0, min(1.0, opacity))) * 255)
 
 
-def _track_style_line(name: str, track: TrackStyle, margin_v: int) -> str:
+def _track_style_line(
+    name: str,
+    track: TrackStyle,
+    *,
+    play_res_x: int,
+    play_res_y: int,
+) -> str:
     primary = _hex_to_ass_color(track.color)
     karaoke = _hex_to_ass_color(track.karaoke_active_color)
     back_alpha = _opacity_to_ass_alpha(track.background_opacity)
     back_colour = f"&H{back_alpha:02X}000000"
     bold = -1 if track.bold else 0
     italic = -1 if track.italic else 0
-    fontsize = _ass_font_size(track.font_size)
+    fontsize = _ass_font_size(track.font_size, play_res_y)
+    outline = _ass_outline(play_res_y)
+    margin_lr = _ass_side_margin(play_res_x)
+    margin_v = max(16, int(play_res_y * 0.04))
     return (
         f"Style: {name},{track.font_family},{fontsize},{primary},{karaoke},"
-        f"&H00000000,{back_colour},{bold},{italic},0,0,100,100,0,0,1,3,1,2,80,80,{margin_v},1"
+        f"&H00000000,{back_colour},{bold},{italic},0,0,100,100,0,0,1,{outline},1,2,"
+        f"{margin_lr},{margin_lr},{margin_v},1"
     )
 
 
@@ -157,8 +227,12 @@ def build_ass_header(
     play_res_y: int = 1080,
 ) -> str:
     style = style or SubtitleStyleConfig()
-    source_line = _track_style_line("Source", style.source, max(60, int(play_res_y * 0.11)))
-    target_line = _track_style_line("Target", style.target, max(40, int(play_res_y * 0.055)))
+    source_line = _track_style_line(
+        "Source", style.source, play_res_x=play_res_x, play_res_y=play_res_y
+    )
+    target_line = _track_style_line(
+        "Target", style.target, play_res_x=play_res_x, play_res_y=play_res_y
+    )
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_res_x}
@@ -199,6 +273,10 @@ def build_ass(
     play_res_x: int = 1920,
     play_res_y: int = 1080,
 ) -> str:
+    style = style or SubtitleStyleConfig()
+    margin_lr = _ass_side_margin(play_res_x)
+    source_font_size = _ass_font_size(style.source.font_size, play_res_y)
+    target_font_size = _ass_font_size(style.target.font_size, play_res_y)
     lines = [build_ass_header(style, play_res_x=play_res_x, play_res_y=play_res_y)]
     for cue in cues:
         start = _fmt_ass_time(cue.start)
@@ -209,11 +287,20 @@ def build_ass(
         target_text = _karaoke_line(cue.target.words, cue.start) or _ass_escape(
             cue.target.text
         )
-        lines.append(
-            f"Dialogue: 0,{start},{end},Source,,0,0,0,,{source_text}"
+        source_pos, target_pos = _stacked_pos_tags(
+            play_res_x=play_res_x,
+            play_res_y=play_res_y,
+            source_text=cue.source.text,
+            target_text=cue.target.text,
+            source_font_size=source_font_size,
+            target_font_size=target_font_size,
+            margin_lr=margin_lr,
         )
         lines.append(
-            f"Dialogue: 0,{start},{end},Target,,0,0,0,,{target_text}"
+            f"Dialogue: 0,{start},{end},Source,,0,0,0,,{source_pos}{source_text}"
+        )
+        lines.append(
+            f"Dialogue: 0,{start},{end},Target,,0,0,0,,{target_pos}{target_text}"
         )
     return "\n".join(lines) + "\n"
 
