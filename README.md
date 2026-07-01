@@ -33,7 +33,7 @@ Supported spoken languages depend on the ASR engine (Qwen supports a fixed set; 
 
 https://github.com/user-attachments/assets/3b2deb8f-3903-41ce-b451-d06bd67da0cd
 
-<sub><i>Original video on YouTube: https://www.youtube.com/shorts/sugqmdavXFs</i></sub>
+<sub><i>Original video on YouTube: https://www.youtube.com/watch?v=YsJCXFOgvMM</i></sub>
 
 ---
 
