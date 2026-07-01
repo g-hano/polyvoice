@@ -282,7 +282,7 @@ class JobManager:
             encoding="utf-8",
         )
         out = job_dir / "export.mp4"
-        subtitles.burn_in(media, ass, out)
+        subtitles.burn_in(media, out, cues=cues, style=style)
         job.export_filename = out.name
         self._persist(job)
         return out

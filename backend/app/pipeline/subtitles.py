@@ -12,8 +12,15 @@ from ..config import SubtitleStyleConfig, TrackStyle
 from ..models import Cue, Line, Word
 from .segment import Segment
 
-ASS_FONT_SCALE = 2.7
-REFERENCE_PLAY_RES_Y = 1080
+# Preview player uses max-h 480px; overlay padding/gap are CSS px at that scale.
+PREVIEW_DISPLAY_HEIGHT = 480
+PREVIEW_BOTTOM_PAD_PX = 24  # pb-6
+PREVIEW_TRACK_GAP_PX = 8  # gap-2
+PREVIEW_BOX_PAD_Y_PX = 8  # py-2
+PREVIEW_BOX_PAD_X_PX = 20  # px-5
+PREVIEW_CONTAINER_PAD_PX = 16  # px-4
+CHARS_PER_FONT_WIDTH = 0.42
+BOLD_WIDTH_FACTOR = 1.12
 
 
 def _split_target_words(text: str) -> List[str]:
@@ -98,66 +105,134 @@ def _hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
 
 
-def _ass_font_size(px: int, play_res_y: int = REFERENCE_PLAY_RES_Y) -> int:
+def _scale_preview_px(px: int, play_res_y: int) -> int:
+    """Map preview CSS px to native video pixels."""
+    return max(1, round(px * play_res_y / PREVIEW_DISPLAY_HEIGHT))
+
+
+def _ass_font_size(px: int, play_res_y: int) -> int:
     """Map preview CSS px to ASS font size, scaled to the video height."""
-    scaled = px * ASS_FONT_SCALE * play_res_y / REFERENCE_PLAY_RES_Y
-    return max(14, round(scaled))
+    return max(12, _scale_preview_px(px, play_res_y))
 
 
-def _ass_outline(play_res_y: int) -> int:
-    return max(1, round(3 * play_res_y / REFERENCE_PLAY_RES_Y))
+def _ass_box_padding(play_res_y: int) -> int:
+    """ASS BorderStyle=3 uses Outline as box padding (preview py-2)."""
+    return _scale_preview_px(PREVIEW_BOX_PAD_Y_PX, play_res_y)
 
 
-def _ass_side_margin(play_res_x: int) -> int:
-    return max(40, int(play_res_x * 0.08))
+def _subtitle_layout(play_res_x: int, play_res_y: int) -> dict[str, int]:
+    """Layout metrics matching SubtitleOverlay (max-w 95%, px-4/px-5 padding)."""
+    box_pad_x = _scale_preview_px(PREVIEW_BOX_PAD_X_PX, play_res_y)
+    box_pad_y = _ass_box_padding(play_res_y)
+    container_pad = _scale_preview_px(PREVIEW_CONTAINER_PAD_PX, play_res_y)
+    track_max = int((play_res_x - 2 * container_pad) * 0.95)
+    usable_width = max(track_max - 2 * box_pad_x, play_res_x // 4)
+    margin_l = max(0, (play_res_x - usable_width) // 2)
+    margin_r = max(0, play_res_x - usable_width - margin_l)
+    return {
+        "play_res_y": play_res_y,
+        "box_pad_x": box_pad_x,
+        "box_pad_y": box_pad_y,
+        "usable_width": usable_width,
+        "margin_l": margin_l,
+        "margin_r": margin_r,
+        "bottom_pad": _scale_preview_px(PREVIEW_BOTTOM_PAD_PX, play_res_y),
+        "gap": _scale_preview_px(PREVIEW_TRACK_GAP_PX, play_res_y),
+        "cx": play_res_x // 2,
+    }
 
 
-def _estimate_wrapped_lines(text: str, *, play_res_x: int, font_size: int, margin_lr: int) -> int:
-    """Rough line count for bottom-anchored ASS text with word wrap."""
-    plain = re.sub(r"\{[^}]*\}", "", text).replace("\\N", " ").strip()
-    if not plain:
-        return 1
-    usable = max(play_res_x - 2 * margin_lr, play_res_x // 3)
-    chars_per_line = max(10, int(usable / max(font_size * 0.55, 1)))
-    lines = 1
-    current = 0
-    for word in plain.split():
-        word_len = len(word) + (1 if current else 0)
-        if current and current + word_len > chars_per_line:
-            lines += 1
-            current = len(word)
+def _word_display_width(word: str, font_size: int, *, bold: bool = False) -> float:
+    factor = CHARS_PER_FONT_WIDTH * (BOLD_WIDTH_FACTOR if bold else 1.0)
+    return max(len(word), 1) * font_size * factor
+
+
+def _pack_words_into_lines(
+    words: List[str],
+    *,
+    usable_width: int,
+    font_size: int,
+    bold: bool = False,
+) -> List[List[str]]:
+    """Greedy word wrap to match preview line breaking."""
+    if not words:
+        return [[]]
+    space_width = font_size * 0.25
+    lines: List[List[str]] = []
+    current: List[str] = []
+    current_width = 0.0
+    for word in words:
+        word_width = _word_display_width(word, font_size, bold=bold)
+        extra = (space_width if current else 0.0) + word_width
+        if current and current_width + extra > usable_width:
+            lines.append(current)
+            current = [word]
+            current_width = word_width
         else:
-            current += word_len
+            current.append(word)
+            current_width += extra
+    if current:
+        lines.append(current)
     return lines
+
+
+def _plain_words(text: str) -> List[str]:
+    plain = re.sub(r"\{[^}]*\}", "", text).replace("\\N", " ").strip()
+    return plain.split() if plain else []
+
+
+def _count_wrapped_lines(
+    text: str,
+    *,
+    usable_width: int,
+    font_size: int,
+    bold: bool = False,
+) -> int:
+    return len(_pack_words_into_lines(_plain_words(text), usable_width=usable_width, font_size=font_size, bold=bold))
+
+
+def _wrap_plain_text(
+    text: str,
+    *,
+    usable_width: int,
+    font_size: int,
+    bold: bool = False,
+) -> str:
+    lines = _pack_words_into_lines(
+        _plain_words(text),
+        usable_width=usable_width,
+        font_size=font_size,
+        bold=bold,
+    )
+    return "\\N".join(_ass_escape(" ".join(line)) for line in lines if line)
 
 
 def _line_block_height(font_size: int, line_count: int) -> int:
     return max(font_size, int(font_size * 1.28 * line_count))
 
 
+def _track_block_height(font_size: int, line_count: int, box_pad: int) -> int:
+    """Text block height including BorderStyle=3 box padding."""
+    return _line_block_height(font_size, line_count) + 2 * box_pad
+
+
 def _stacked_pos_tags(
     *,
-    play_res_x: int,
-    play_res_y: int,
-    source_text: str,
-    target_text: str,
+    layout: dict[str, int],
+    source_lines: int,
+    target_lines: int,
     source_font_size: int,
     target_font_size: int,
-    margin_lr: int,
 ) -> tuple[str, str]:
     """Return \\pos tags so source sits above target, matching the web preview."""
-    bottom_pad = max(16, int(play_res_y * 0.04))
-    gap = max(6, int(play_res_y * 0.012))
-    cx = play_res_x // 2
-    target_lines = _estimate_wrapped_lines(
-        target_text, play_res_x=play_res_x, font_size=target_font_size, margin_lr=margin_lr
-    )
-    target_y = play_res_y - bottom_pad
-    target_height = _line_block_height(target_font_size, target_lines)
-    source_y = target_y - target_height - gap
+    box_pad_y = layout["box_pad_y"]
+    target_y = layout["play_res_y"] - layout["bottom_pad"]
+    target_height = _track_block_height(target_font_size, target_lines, box_pad_y)
+    source_y = target_y - target_height - layout["gap"]
+    cx = layout["cx"]
     return (
-        f"{{\\an2\\pos({cx},{source_y})}}",
-        f"{{\\an2\\pos({cx},{target_y})}}",
+        f"{{\\an2\\q2\\pos({cx},{source_y})}}",
+        f"{{\\an2\\q2\\pos({cx},{target_y})}}",
     )
 
 
@@ -170,7 +245,8 @@ def _track_style_line(
     name: str,
     track: TrackStyle,
     *,
-    play_res_x: int,
+    margin_l: int,
+    margin_r: int,
     play_res_y: int,
 ) -> str:
     primary = _hex_to_ass_color(track.color)
@@ -180,13 +256,12 @@ def _track_style_line(
     bold = -1 if track.bold else 0
     italic = -1 if track.italic else 0
     fontsize = _ass_font_size(track.font_size, play_res_y)
-    outline = _ass_outline(play_res_y)
-    margin_lr = _ass_side_margin(play_res_x)
-    margin_v = max(16, int(play_res_y * 0.04))
+    box_pad = _ass_box_padding(play_res_y)
+    margin_v = _scale_preview_px(PREVIEW_BOTTOM_PAD_PX, play_res_y)
     return (
         f"Style: {name},{track.font_family},{fontsize},{primary},{karaoke},"
-        f"&H00000000,{back_colour},{bold},{italic},0,0,100,100,0,0,1,{outline},1,2,"
-        f"{margin_lr},{margin_lr},{margin_v},1"
+        f"&H00000000,{back_colour},{bold},{italic},0,0,100,100,0,0,3,{box_pad},0,2,"
+        f"{margin_l},{margin_r},{margin_v},1"
     )
 
 
@@ -225,13 +300,23 @@ def build_ass_header(
     *,
     play_res_x: int = 1920,
     play_res_y: int = 1080,
+    layout: Optional[dict[str, int]] = None,
 ) -> str:
     style = style or SubtitleStyleConfig()
+    layout = layout or _subtitle_layout(play_res_x, play_res_y)
     source_line = _track_style_line(
-        "Source", style.source, play_res_x=play_res_x, play_res_y=play_res_y
+        "Source",
+        style.source,
+        margin_l=layout["margin_l"],
+        margin_r=layout["margin_r"],
+        play_res_y=play_res_y,
     )
     target_line = _track_style_line(
-        "Target", style.target, play_res_x=play_res_x, play_res_y=play_res_y
+        "Target",
+        style.target,
+        margin_l=layout["margin_l"],
+        margin_r=layout["margin_r"],
+        play_res_y=play_res_y,
     )
     return f"""[Script Info]
 ScriptType: v4.00+
@@ -250,20 +335,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
 
-def _karaoke_line(words: List[Word], cue_start: float) -> str:
-    """Build a line with ASS \\k karaoke tags (centiseconds per word)."""
+def _karaoke_line(
+    words: List[Word],
+    cue_start: float,
+    *,
+    usable_width: int,
+    font_size: int,
+    bold: bool = False,
+) -> str:
+    """Build ASS karaoke text with explicit \\N line breaks for narrow videos."""
     if not words:
         return ""
-    parts: List[str] = []
+    word_texts = [w.w for w in words]
+    line_groups = _pack_words_into_lines(
+        word_texts,
+        usable_width=usable_width,
+        font_size=font_size,
+        bold=bold,
+    )
+    rendered_lines: List[str] = []
+    idx = 0
     prev_end = cue_start
-    for word in words:
-        gap_cs = max(int(round((word.start - prev_end) * 100)), 0)
-        if gap_cs > 0:
-            parts.append(f"{{\\k{gap_cs}}} ")
-        dur_cs = max(int(round((word.end - word.start) * 100)), 1)
-        parts.append(f"{{\\k{dur_cs}}}{_ass_escape(word.w)} ")
-        prev_end = word.end
-    return "".join(parts).strip()
+    for group in line_groups:
+        parts: List[str] = []
+        for _ in group:
+            word = words[idx]
+            idx += 1
+            gap_cs = max(int(round((word.start - prev_end) * 100)), 0)
+            if gap_cs > 0:
+                parts.append(f"{{\\k{gap_cs}}} ")
+            dur_cs = max(int(round((word.end - word.start) * 100)), 1)
+            parts.append(f"{{\\k{dur_cs}}}{_ass_escape(word.w)} ")
+            prev_end = word.end
+        rendered_lines.append("".join(parts).strip())
+    return "\\N".join(rendered_lines)
 
 
 def build_ass(
@@ -274,33 +379,79 @@ def build_ass(
     play_res_y: int = 1080,
 ) -> str:
     style = style or SubtitleStyleConfig()
-    margin_lr = _ass_side_margin(play_res_x)
+    layout = _subtitle_layout(play_res_x, play_res_y)
     source_font_size = _ass_font_size(style.source.font_size, play_res_y)
     target_font_size = _ass_font_size(style.target.font_size, play_res_y)
-    lines = [build_ass_header(style, play_res_x=play_res_x, play_res_y=play_res_y)]
+    usable_width = layout["usable_width"]
+    margin_l = layout["margin_l"]
+    margin_r = layout["margin_r"]
+    lines = [
+        build_ass_header(
+            style,
+            play_res_x=play_res_x,
+            play_res_y=play_res_y,
+            layout=layout,
+        )
+    ]
     for cue in cues:
         start = _fmt_ass_time(cue.start)
         end = _fmt_ass_time(cue.end)
-        source_text = _karaoke_line(cue.source.words, cue.start) or _ass_escape(
-            cue.source.text
+        source_text = (
+            _karaoke_line(
+                cue.source.words,
+                cue.start,
+                usable_width=usable_width,
+                font_size=source_font_size,
+                bold=style.source.bold,
+            )
+            if cue.source.words
+            else _wrap_plain_text(
+                cue.source.text,
+                usable_width=usable_width,
+                font_size=source_font_size,
+                bold=style.source.bold,
+            )
         )
-        target_text = _karaoke_line(cue.target.words, cue.start) or _ass_escape(
-            cue.target.text
+        target_text = (
+            _karaoke_line(
+                cue.target.words,
+                cue.start,
+                usable_width=usable_width,
+                font_size=target_font_size,
+                bold=style.target.bold,
+            )
+            if cue.target.words
+            else _wrap_plain_text(
+                cue.target.text,
+                usable_width=usable_width,
+                font_size=target_font_size,
+                bold=style.target.bold,
+            )
+        )
+        source_lines = _count_wrapped_lines(
+            cue.source.text,
+            usable_width=usable_width,
+            font_size=source_font_size,
+            bold=style.source.bold,
+        )
+        target_lines = _count_wrapped_lines(
+            cue.target.text,
+            usable_width=usable_width,
+            font_size=target_font_size,
+            bold=style.target.bold,
         )
         source_pos, target_pos = _stacked_pos_tags(
-            play_res_x=play_res_x,
-            play_res_y=play_res_y,
-            source_text=cue.source.text,
-            target_text=cue.target.text,
+            layout=layout,
+            source_lines=source_lines,
+            target_lines=target_lines,
             source_font_size=source_font_size,
             target_font_size=target_font_size,
-            margin_lr=margin_lr,
         )
         lines.append(
-            f"Dialogue: 0,{start},{end},Source,,0,0,0,,{source_pos}{source_text}"
+            f"Dialogue: 0,{start},{end},Source,,{margin_l},{margin_r},0,,{source_pos}{source_text}"
         )
         lines.append(
-            f"Dialogue: 0,{start},{end},Target,,0,0,0,,{target_pos}{target_text}"
+            f"Dialogue: 0,{start},{end},Target,,{margin_l},{margin_r},0,,{target_pos}{target_text}"
         )
     return "\n".join(lines) + "\n"
 
@@ -332,34 +483,14 @@ def write_artifacts(
     return cues_path, ass_path
 
 
-def burn_in(media_path: Path, ass_path: Path, out_path: Path) -> Path:
-    """Burn the ASS subtitles into the video with ffmpeg."""
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg not found on PATH.")
-    ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(media_path),
-        "-vf",
-        f"subtitles='{ass_arg}'",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "slow",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "copy",
-        "-movflags",
-        "+faststart",
-        str(out_path),
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg burn-in failed:\n{proc.stderr[-2000:]}")
-    return out_path
+def burn_in(
+    media_path: Path,
+    out_path: Path,
+    *,
+    cues: List[Cue],
+    style: SubtitleStyleConfig,
+) -> Path:
+    """Burn subtitles using the preview-matched Pillow renderer."""
+    from .subtitle_render import burn_in_preview
+
+    return burn_in_preview(media_path, out_path, cues, style)
