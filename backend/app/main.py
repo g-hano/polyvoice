@@ -532,6 +532,17 @@ def download_export(job_id: str):
     return FileResponse(path, filename=f"{job_id}_subtitled.mp4")
 
 
+@app.get("/api/jobs/{job_id}/dub")
+def download_dub(job_id: str):
+    job = manager.get_job(job_id)
+    if not job or not job.dub_filename:
+        raise HTTPException(404, "No dubbed video available")
+    path = manager.job_dir(job_id) / job.dub_filename
+    if not path.exists():
+        raise HTTPException(404, "Dubbed video file missing")
+    return FileResponse(path, filename=f"{job_id}_dubbed.mp4")
+
+
 @app.websocket("/api/jobs/{job_id}/progress")
 async def progress_ws(websocket: WebSocket, job_id: str) -> None:
     await websocket.accept()

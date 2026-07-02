@@ -4,6 +4,7 @@ import {
   checkBackendHealth,
   createJob,
   ensureJobModels,
+  dubDownloadUrl,
   exportDownloadUrl,
   getCues,
   getJob,
@@ -155,9 +156,11 @@ function statusLabel(
 function workflowStep(
   progress: ProgressEvent | null,
   cues: Cue[] | null,
-  exportReady: boolean
+  exportReady: boolean,
+  isDubJob: boolean
 ): Step {
   if (exportReady) return "export";
+  if (isDubJob && progress?.status === "done" && cues) return "export";
   if (cues) return "preview";
   if (progress && progress.status !== "error") return "processing";
   return "configure";
@@ -338,7 +341,7 @@ export default function App() {
   };
 
   const isDubJob = jobParams?.jobMode === "dub";
-  const currentStep = workflowStep(progress, cues, exportReady);
+  const currentStep = workflowStep(progress, cues, exportReady, isDubJob);
 
   const sourceLabel =
     (jobParams && languages[jobParams.sourceLang]) || jobParams?.sourceLang || t("app.source");
@@ -496,10 +499,10 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Export toolbar */}
+                {/* Export / download toolbar */}
                 <div className="mt-auto rounded-xl border border-border bg-[var(--panel-bg)] p-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                    {t("app.export")}
+                    Export
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
@@ -510,11 +513,11 @@ export default function App() {
                     >
                       {exporting
                         ? isDubJob
-                          ? t("app.preparing")
-                          : t("app.burning")
+                          ? "Preparing…"
+                          : "Burning…"
                         : isDubJob
-                          ? t("app.dubbedVideo")
-                          : t("app.burnedInVideo")}
+                          ? "Dubbed Video"
+                          : "Burned-in Video"}
                     </Button>
                     {exportReady && (
                       <a
@@ -522,7 +525,7 @@ export default function App() {
                         className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-500"
                       >
                         <IconDownload className="h-4 w-4" />
-                        {t("app.downloadMp4")}
+                        Download MP4
                       </a>
                     )}
                   </div>
@@ -659,7 +662,7 @@ function ProgressPanel({
               key={s}
               className={`rounded-md px-2 py-0.5 text-[10px] font-medium ${progressPillColor(i, stepIdx, workStepCount, isError, progress.status, pct)}`}
             >
-              {t(`status.${s}`, { defaultValue: s })}
+              {statusLabel(s, params, jobRepos, t)}
             </span>
           ))}
         </div>

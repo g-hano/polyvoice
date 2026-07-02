@@ -343,11 +343,17 @@ class JobManager:
         ass = job_dir / "subtitles.ass"
         style = subtitle_style if subtitle_style is not None else job.config.subtitle_style
         ass.write_text(
-            subtitles.build_ass(cues, style, play_res_x=play_res_x, play_res_y=play_res_y),
+            subtitles.build_ass(
+                cues,
+                style,
+                play_res_x=play_res_x,
+                play_res_y=play_res_y,
+                for_export=True,
+            ),
             encoding="utf-8",
         )
         out = job_dir / "export.mp4"
-        subtitles.burn_in(media, ass, out)
+        subtitles.burn_in(media, out, ass_path=ass)
         job.export_filename = out.name
         self._persist(job)
         return out
