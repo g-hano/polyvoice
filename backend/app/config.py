@@ -419,6 +419,9 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("HF_HOME", "SUBTITLE_HF_HOME", "hf_home"),
     )
+    export_crf: int = 14
+    export_preset: str = "veryslow"
+    export_pix_fmt: str = "yuv420p"
 
     @property
     def jobs_dir(self) -> Path:

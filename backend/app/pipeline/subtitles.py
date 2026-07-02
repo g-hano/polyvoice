@@ -248,16 +248,24 @@ def _track_style_line(
     margin_l: int,
     margin_r: int,
     play_res_y: int,
+    for_export: bool = False,
 ) -> str:
     primary = _hex_to_ass_color(track.color)
     karaoke = _hex_to_ass_color(track.karaoke_active_color)
-    back_alpha = _opacity_to_ass_alpha(track.background_opacity)
-    back_colour = f"&H{back_alpha:02X}000000"
     bold = -1 if track.bold else 0
     italic = -1 if track.italic else 0
     fontsize = _ass_font_size(track.font_size, play_res_y)
-    box_pad = _ass_box_padding(play_res_y)
     margin_v = _scale_preview_px(PREVIEW_BOTTOM_PAD_PX, play_res_y)
+    if for_export:
+        outline = max(1, _scale_preview_px(2, play_res_y))
+        return (
+            f"Style: {name},{track.font_family},{fontsize},{primary},{karaoke},"
+            f"&H00000000,&HFF000000,{bold},{italic},0,0,100,100,0,0,1,{outline},1,2,"
+            f"{margin_l},{margin_r},{margin_v},1"
+        )
+    back_alpha = _opacity_to_ass_alpha(track.background_opacity)
+    back_colour = f"&H{back_alpha:02X}000000"
+    box_pad = _ass_box_padding(play_res_y)
     return (
         f"Style: {name},{track.font_family},{fontsize},{primary},{karaoke},"
         f"&H00000000,{back_colour},{bold},{italic},0,0,100,100,0,0,3,{box_pad},0,2,"
@@ -301,6 +309,7 @@ def build_ass_header(
     play_res_x: int = 1920,
     play_res_y: int = 1080,
     layout: Optional[dict[str, int]] = None,
+    for_export: bool = False,
 ) -> str:
     style = style or SubtitleStyleConfig()
     layout = layout or _subtitle_layout(play_res_x, play_res_y)
@@ -310,6 +319,7 @@ def build_ass_header(
         margin_l=layout["margin_l"],
         margin_r=layout["margin_r"],
         play_res_y=play_res_y,
+        for_export=for_export,
     )
     target_line = _track_style_line(
         "Target",
@@ -317,6 +327,7 @@ def build_ass_header(
         margin_l=layout["margin_l"],
         margin_r=layout["margin_r"],
         play_res_y=play_res_y,
+        for_export=for_export,
     )
     return f"""[Script Info]
 ScriptType: v4.00+
@@ -377,6 +388,7 @@ def build_ass(
     *,
     play_res_x: int = 1920,
     play_res_y: int = 1080,
+    for_export: bool = False,
 ) -> str:
     style = style or SubtitleStyleConfig()
     layout = _subtitle_layout(play_res_x, play_res_y)
@@ -391,6 +403,7 @@ def build_ass(
             play_res_x=play_res_x,
             play_res_y=play_res_y,
             layout=layout,
+            for_export=for_export,
         )
     ]
     for cue in cues:
@@ -487,10 +500,9 @@ def burn_in(
     media_path: Path,
     out_path: Path,
     *,
-    cues: List[Cue],
-    style: SubtitleStyleConfig,
+    ass_path: Path,
 ) -> Path:
-    """Burn subtitles using the preview-matched Pillow renderer."""
-    from .subtitle_render import burn_in_preview
+    """Burn subtitles via ffmpeg libass for maximum export quality."""
+    from .subtitle_render import burn_in_ass
 
-    return burn_in_preview(media_path, out_path, cues, style)
+    return burn_in_ass(media_path, ass_path, out_path)

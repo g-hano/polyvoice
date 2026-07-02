@@ -10,14 +10,13 @@ from typing import List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from ..config import SubtitleStyleConfig, TrackStyle
+from ..config import SubtitleStyleConfig, TrackStyle, settings
 from ..models import Cue, Line, Word
 from .subtitles import (
     PREVIEW_BOTTOM_PAD_PX,
     PREVIEW_BOX_PAD_X_PX,
     PREVIEW_BOX_PAD_Y_PX,
     PREVIEW_CONTAINER_PAD_PX,
-    PREVIEW_DISPLAY_HEIGHT,
     PREVIEW_TRACK_GAP_PX,
     _scale_preview_px,
     probe_video_size,
@@ -209,6 +208,20 @@ def _apply_backdrop_blur(frame: Image.Image, box: _TrackBox, radius: int) -> Non
     frame.paste(blurred, (x0, y0))
 
 
+def _apply_backdrop_blur_to_overlay(
+    overlay: Image.Image,
+    source: Image.Image,
+    box: _TrackBox,
+    radius: int,
+) -> None:
+    if radius <= 0:
+        return
+    x0, y0, x1, y1 = box.x0, box.y0, box.x1, box.y1
+    region = source.crop((x0, y0, x1, y1))
+    blurred = region.filter(ImageFilter.GaussianBlur(radius=radius)).convert("RGBA")
+    overlay.paste(blurred, (x0, y0))
+
+
 def _draw_track_box(
     frame: Image.Image,
     box: _TrackBox,
@@ -217,10 +230,14 @@ def _draw_track_box(
     *,
     radius: int,
     blur_radius: int,
+    source: Optional[Image.Image] = None,
 ) -> None:
     opacity = max(0.0, min(1.0, track.background_opacity))
     if opacity > 0:
-        _apply_backdrop_blur(frame, box, blur_radius)
+        if source is not None:
+            _apply_backdrop_blur_to_overlay(frame, source, box, blur_radius)
+        else:
+            _apply_backdrop_blur(frame, box, blur_radius)
         tint = Image.new("RGBA", frame.size, (0, 0, 0, 0))
         tint_draw = ImageDraw.Draw(tint)
         alpha = int(opacity * 255)
@@ -252,20 +269,14 @@ def _draw_track_box(
         y += line.height
 
 
-def render_frame(
+def _layout_cue_boxes(
     frame: Image.Image,
-    cues: List[Cue],
+    cue: Cue,
     style: SubtitleStyleConfig,
     time: float,
-) -> Image.Image:
-    """Composite preview-style subtitles onto a video frame."""
-    cue = _find_cue(cues, time)
-    if cue is None:
-        return frame
-
+) -> Tuple[_TrackBox, _TrackBox, ImageFont.ImageFont, ImageFont.ImageFont, int, int]:
     play_res_x, play_res_y = frame.size
-    result = frame.convert("RGBA")
-    draw = ImageDraw.Draw(result)
+    draw = ImageDraw.Draw(Image.new("RGBA", frame.size))
 
     source_font_px = _scale_preview_px(style.source.font_size, play_res_y)
     target_font_px = _scale_preview_px(style.target.font_size, play_res_y)
@@ -297,13 +308,62 @@ def render_frame(
         target_pad_x,
         target_pad_y,
     )
-
     radius = _scale_preview_px(PREVIEW_ROUNDED_RADIUS_PX, play_res_y)
     blur_radius = max(1, _scale_preview_px(PREVIEW_BLUR_RADIUS_PX, play_res_y))
+    return source_box, target_box, source_font, target_font, radius, blur_radius
 
-    _draw_track_box(result, target_box, style.target, target_font, radius=radius, blur_radius=blur_radius)
-    _draw_track_box(result, source_box, style.source, source_font, radius=radius, blur_radius=blur_radius)
-    return result.convert("RGB")
+
+def render_overlay_frame(
+    frame: Image.Image,
+    cues: List[Cue],
+    style: SubtitleStyleConfig,
+    time: float,
+) -> Image.Image:
+    """Render blur/glow/text as a transparent RGBA overlay for ffmpeg compositing."""
+    play_res_x, play_res_y = frame.size
+    overlay = Image.new("RGBA", (play_res_x, play_res_y), (0, 0, 0, 0))
+    cue = _find_cue(cues, time)
+    if cue is None:
+        return overlay
+
+    source = frame.convert("RGB")
+    source_box, target_box, source_font, target_font, radius, blur_radius = _layout_cue_boxes(
+        source, cue, style, time
+    )
+    _draw_track_box(
+        overlay,
+        target_box,
+        style.target,
+        target_font,
+        radius=radius,
+        blur_radius=blur_radius,
+        source=source,
+    )
+    _draw_track_box(
+        overlay,
+        source_box,
+        style.source,
+        source_font,
+        radius=radius,
+        blur_radius=blur_radius,
+        source=source,
+    )
+    return overlay
+
+
+def render_frame(
+    frame: Image.Image,
+    cues: List[Cue],
+    style: SubtitleStyleConfig,
+    time: float,
+) -> Image.Image:
+    """Composite preview-style subtitles onto a video frame."""
+    overlay = render_overlay_frame(frame, cues, style, time)
+    if overlay.getextrema()[3] == (0, 0):
+        return frame
+    base = frame.convert("RGBA")
+    composed = Image.alpha_composite(base, overlay)
+    return composed.convert("RGB")
 
 
 def _probe_fps(path: Path) -> float:
@@ -343,105 +403,104 @@ def _probe_fps(path: Path) -> float:
     return 30.0
 
 
-def burn_in_preview(
-    media_path: Path,
-    out_path: Path,
-    cues: List[Cue],
-    style: SubtitleStyleConfig,
-) -> Path:
-    """Burn subtitles by rendering the same layout as the web preview."""
+def _probe_color_properties(path: Path) -> dict[str, str]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return {}
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=color_primaries,color_transfer,color_space",
+        "-of",
+        "default=noprint_wrappers=1",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {}
+    props: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if value and value.lower() != "unknown":
+            props[key] = value
+    return props
+
+
+def _build_encode_args(
+    *,
+    crf: int | None = None,
+    preset: str | None = None,
+    pix_fmt: str | None = None,
+    color_props: Optional[dict[str, str]] = None,
+) -> List[str]:
+    crf = settings.export_crf if crf is None else crf
+    preset = settings.export_preset if preset is None else preset
+    pix_fmt = settings.export_pix_fmt if pix_fmt is None else pix_fmt
+    args = [
+        "-c:v",
+        "libx264",
+        "-preset",
+        preset,
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        pix_fmt,
+        "-x264-params",
+        "ref=6:bframes=8:aq-mode=3",
+    ]
+    color_props = color_props or {}
+    if primaries := color_props.get("color_primaries"):
+        args.extend(["-color_primaries", primaries])
+    if transfer := color_props.get("color_transfer"):
+        args.extend(["-color_trc", transfer])
+    if space := color_props.get("color_space"):
+        args.extend(["-colorspace", space])
+    return args
+
+
+def _escape_ffmpeg_path(path: Path) -> str:
+    """Escape a filesystem path for use inside an ffmpeg filter argument."""
+    resolved = path.resolve().as_posix()
+    return resolved.replace(":", "\\:").replace("'", "'\\''")
+
+
+def burn_in_ass(media_path: Path, ass_path: Path, out_path: Path) -> Path:
+    """Burn ASS subtitles with ffmpeg libass (single encode pass, best quality)."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH.")
+    if not ass_path.exists():
+        raise FileNotFoundError(f"ASS file not found: {ass_path}")
 
-    width, height = probe_video_size(media_path)
-    fps = _probe_fps(media_path)
-    frame_bytes = width * height * 3
-
-    decode_cmd = [
-        ffmpeg,
-        "-v",
-        "error",
-        "-i",
-        str(media_path),
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-",
-    ]
-    encode_cmd = [
+    color_props = _probe_color_properties(media_path)
+    ass_filter = f"ass='{_escape_ffmpeg_path(ass_path)}'"
+    cmd = [
         ffmpeg,
         "-y",
         "-v",
         "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{width}x{height}",
-        "-r",
-        str(fps),
-        "-i",
-        "-",
         "-i",
         str(media_path),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a?",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "slow",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
+        "-vf",
+        ass_filter,
+        *_build_encode_args(color_props=color_props),
         "-c:a",
         "copy",
+        "-map_metadata",
+        "0",
         "-movflags",
         "+faststart",
         str(out_path),
     ]
-
-    decoder = subprocess.Popen(
-        decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-    )
-    encoder = subprocess.Popen(
-        encode_cmd,
-        stdin=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    frame_idx = 0
-    try:
-        assert decoder.stdout is not None
-        assert encoder.stdin is not None
-        while True:
-            raw = decoder.stdout.read(frame_bytes)
-            if len(raw) < frame_bytes:
-                break
-            frame = Image.frombytes("RGB", (width, height), raw)
-            t = frame_idx / fps
-            composed = render_frame(frame, cues, style, t)
-            encoder.stdin.write(composed.tobytes())
-            frame_idx += 1
-    finally:
-        if decoder.stdout:
-            decoder.stdout.close()
-        decoder.wait()
-        if encoder.stdin:
-            encoder.stdin.close()
-        encoder.wait()
-
-    if decoder.returncode not in (0, None):
-        err = (decoder.stderr.read() if decoder.stderr else b"").decode(errors="replace")
-        raise RuntimeError(f"ffmpeg decode failed:\n{err[-2000:]}")
-    if encoder.returncode != 0:
-        err = (encoder.stderr.read() if encoder.stderr else b"").decode(errors="replace")
-        raise RuntimeError(f"ffmpeg encode failed:\n{err[-2000:]}")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg ass burn-in failed:\n{proc.stderr[-2000:]}")
 
     src_w, src_h = probe_video_size(media_path)
     out_w, out_h = probe_video_size(out_path)

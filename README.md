@@ -18,7 +18,7 @@ Everything runs on your machine — no cloud API keys required for the core work
 | **GPU memory** | ASR model is unloaded from VRAM before translation starts |
 | **Quality control** | Optional back-translation + local LLM review (LM Studio, Ollama, llama.cpp) |
 | **Player** | Dual subtitles, clickable transcript, per-word highlight sync |
-| **Export** | Burn styled subtitles into MP4 via ffmpeg (CRF 18, audio copied losslessly) |
+| **Export** | Burn styled subtitles into MP4 via ffmpeg libass (CRF 14, veryslow; outline-only, no blur/glow; audio copied losslessly) |
 | **Dubbing** | TTS per cue; Demucs vocal/background split (early in pipeline); adjustable background level; dubbed MP4 export |
 | **Model manager** | Nested accordion library (ASR / Translation / TTS families); optional HF token |
 | **Settings UI** | Gear icon (top-right): Voice & dubbing, ASR, Translation, Quality control accordions |
@@ -245,13 +245,15 @@ yt-dlp selects the highest available quality:
 
 ### Subtitle burn-in export
 
-Burning ASS subtitles requires re-encoding the video track. Export uses:
+Burning subtitles requires re-encoding the video track. Export uses **ffmpeg libass** with the generated `subtitles.ass` file — a single encode pass for the best image quality. Preview blur/glow effects are not included in export (outline + karaoke colors only).
 
-- **Video:** `libx264 -preset slow -crf 18` (visually near-lossless)
+- **Video:** `libx264 -preset veryslow -crf 14` with tuned x264 params (override via `SUBTITLE_EXPORT_CRF`, `SUBTITLE_EXPORT_PRESET`, `SUBTITLE_EXPORT_PIX_FMT`)
+- **Subtitles:** libass `ass` filter (no per-frame Pillow re-encode)
 - **Audio:** copied unchanged (`-c:a copy`)
+- **Color metadata:** copied from the source stream when available
 - **Container:** MP4 with `faststart` for streaming/seeking
 
-The source video in the player is the original downloaded/uploaded file; only the exported MP4 is re-encoded.
+The source video in the player is the original downloaded/uploaded file; only the exported MP4 is re-encoded. The in-browser preview may show backdrop blur and glow that differ slightly from the exported MP4.
 
 ---
 

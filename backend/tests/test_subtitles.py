@@ -3,13 +3,19 @@ from __future__ import annotations
 
 import re
 import unittest
+from pathlib import Path
 
 from PIL import Image
 
 from app.config import SubtitleStyleConfig, TrackStyle
 from app.models import Cue, Line, Word
 from app.pipeline import subtitles
-from app.pipeline.subtitle_render import render_frame
+from app.pipeline.subtitle_render import (
+  _build_encode_args,
+  _escape_ffmpeg_path,
+  render_frame,
+  render_overlay_frame,
+)
 
 
 class SubtitleAssTests(unittest.TestCase):
@@ -100,10 +106,26 @@ class SubtitleAssTests(unittest.TestCase):
       margin_l=layout["margin_l"],
       margin_r=layout["margin_r"],
       play_res_y=640,
+      for_export=False,
     )
     self.assertIn(",3,", line)
     self.assertIn("&HA0000000", line)
     self.assertRegex(line, r",\d+,0,2,")
+
+  def test_track_style_export_uses_outline_without_background(self) -> None:
+    layout = subtitles._subtitle_layout(360, 640)
+    track = TrackStyle(background_opacity=0.37)
+    line = subtitles._track_style_line(
+      "Target",
+      track,
+      margin_l=layout["margin_l"],
+      margin_r=layout["margin_r"],
+      play_res_y=640,
+      for_export=True,
+    )
+    self.assertIn(",1,", line)
+    self.assertIn("&HFF000000", line)
+    self.assertRegex(line, r",0,0,1,\d+,1,2,")
 
   def test_build_ass_header_uses_video_resolution(self) -> None:
     header = subtitles.build_ass_header(play_res_x=360, play_res_y=640)
@@ -183,6 +205,57 @@ class SubtitleAssTests(unittest.TestCase):
     plain = base.copy()
     rendered = render_frame(base, cues, SubtitleStyleConfig(), 0.5)
     self.assertNotEqual(list(plain.getdata()), list(rendered.getdata()))
+
+  def test_render_overlay_frame_is_fully_transparent_without_cue(self) -> None:
+    base = Image.new("RGB", (360, 640), (40, 40, 40))
+    overlay = render_overlay_frame(base, [], SubtitleStyleConfig(), 0.5)
+    self.assertEqual(overlay.mode, "RGBA")
+    self.assertEqual(overlay.getextrema()[3], (0, 0))
+
+  def test_render_overlay_frame_has_opaque_subtitle_region(self) -> None:
+    words = [Word(w="hello", start=0.0, end=1.0)]
+    cues = [
+      Cue(
+        id=0,
+        start=0.0,
+        end=2.0,
+        source=Line(text="hello", words=words),
+        target=Line(text="merhaba", words=[Word(w="merhaba", start=0.0, end=2.0)]),
+      )
+    ]
+    base = Image.new("RGB", (360, 640), (40, 40, 40))
+    overlay = render_overlay_frame(base, cues, SubtitleStyleConfig(), 0.5)
+    self.assertGreater(overlay.getextrema()[3][1], 0)
+    sample = (180, 600)
+    self.assertGreater(overlay.getpixel(sample)[3], 0)
+
+  def test_build_encode_args_uses_export_settings(self) -> None:
+    args = _build_encode_args(crf=14, preset="veryslow", pix_fmt="yuv420p")
+    self.assertIn("-crf", args)
+    self.assertIn("14", args)
+    self.assertIn("-preset", args)
+    self.assertIn("veryslow", args)
+    self.assertIn("-pix_fmt", args)
+    self.assertIn("yuv420p", args)
+    self.assertIn("-x264-params", args)
+
+  def test_build_encode_args_copies_color_metadata(self) -> None:
+    args = _build_encode_args(
+      color_props={
+        "color_primaries": "bt709",
+        "color_transfer": "bt709",
+        "color_space": "bt709",
+      }
+    )
+    self.assertIn("-color_primaries", args)
+    self.assertIn("bt709", args)
+    self.assertIn("-color_trc", args)
+    self.assertIn("-colorspace", args)
+
+  def test_escape_ffmpeg_path_escapes_drive_colon(self) -> None:
+    escaped = _escape_ffmpeg_path(Path("C:/temp/subtitles.ass"))
+    self.assertIn("\\:", escaped)
+    self.assertIn("subtitles.ass", escaped)
 
 
 if __name__ == "__main__":
