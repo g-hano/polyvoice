@@ -251,6 +251,10 @@ export function exportDownloadUrl(jobId: string): string {
   return `${API}/jobs/${jobId}/export`;
 }
 
+export function dubDownloadUrl(jobId: string): string {
+  return `${API}/jobs/${jobId}/dub`;
+}
+
 export function subscribeProgress(
   jobId: string,
   onEvent: (e: ProgressEvent) => void

@@ -3,6 +3,7 @@ import {
   checkBackendHealth,
   createJob,
   ensureJobModels,
+  dubDownloadUrl,
   exportDownloadUrl,
   getCues,
   getLanguages,
@@ -164,9 +165,11 @@ function statusLabel(
 function workflowStep(
   progress: ProgressEvent | null,
   cues: Cue[] | null,
-  exportReady: boolean
+  exportReady: boolean,
+  isDubJob: boolean
 ): Step {
   if (exportReady) return "export";
+  if (isDubJob && progress?.status === "done" && cues) return "export";
   if (cues) return "preview";
   if (progress && progress.status !== "error") return "processing";
   return "configure";
@@ -274,7 +277,7 @@ export default function App() {
   };
 
   const isDubJob = jobParams?.jobMode === "dub";
-  const currentStep = workflowStep(progress, cues, exportReady);
+  const currentStep = workflowStep(progress, cues, exportReady, isDubJob);
 
   const sourceLabel =
     (jobParams && languages[jobParams.sourceLang]) || jobParams?.sourceLang || "Source";
@@ -425,34 +428,40 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Export toolbar */}
+                {/* Export / download toolbar */}
                 <div className="mt-auto rounded-xl border border-border bg-[var(--panel-bg)] p-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                    Export
+                    {isDubJob ? "Download" : "Export"}
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="secondary"
-                      icon={<IconDownload />}
-                      onClick={handleExport}
-                      disabled={exporting}
-                    >
-                      {exporting
-                        ? isDubJob
-                          ? "Preparing…"
-                          : "Burning…"
-                        : isDubJob
-                          ? "Dubbed Video"
-                          : "Burned-in Video"}
-                    </Button>
-                    {exportReady && (
+                    {isDubJob ? (
                       <a
-                        href={exportDownloadUrl(jobId)}
+                        href={dubDownloadUrl(jobId)}
                         className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-500"
                       >
                         <IconDownload className="h-4 w-4" />
                         Download MP4
                       </a>
+                    ) : (
+                      <>
+                        <Button
+                          variant="secondary"
+                          icon={<IconDownload />}
+                          onClick={handleExport}
+                          disabled={exporting}
+                        >
+                          {exporting ? "Burning…" : "Burned-in Video"}
+                        </Button>
+                        {exportReady && (
+                          <a
+                            href={exportDownloadUrl(jobId)}
+                            className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-500"
+                          >
+                            <IconDownload className="h-4 w-4" />
+                            Download MP4
+                          </a>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
