@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { deleteJob, listJobs } from "../api";
+import { deleteJob, deleteQueue, listJobs, listQueues } from "../api";
+import type { QueueInfo } from "../api";
 import Badge from "./ui/Badge";
 import Button from "./ui/Button";
-import { IconChevron, IconDub, IconSubtitles } from "./ui/Icons";
+import { IconBatchQueue, IconChevron, IconDub, IconSubtitles } from "./ui/Icons";
 import type { JobListItem, JobStatus } from "../types";
 
 const SIDEBAR_WIDTH = 240;
@@ -25,6 +26,13 @@ function statusVariant(status: JobStatus): "success" | "error" | "warning" | "in
   return "info";
 }
 
+function queueStatusVariant(status: string): "success" | "error" | "warning" | "info" | "default" {
+  if (status === "done") return "success";
+  if (status === "error") return "error";
+  if (status === "pending") return "default";
+  return "info";
+}
+
 function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleString(undefined, {
     month: "short",
@@ -36,18 +44,23 @@ function formatDate(ts: number): string {
 
 export default function ProjectSidebar({
   activeJobId,
+  activeQueueId,
   onSelectProject,
+  onSelectQueue,
   onNewProject,
   refreshToken,
 }: {
   activeJobId: string | null;
+  activeQueueId?: string | null;
   onSelectProject: (id: string) => void;
+  onSelectQueue?: (id: string) => void;
   onNewProject: () => void;
   refreshToken?: number;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(readSidebarOpen);
   const [projects, setProjects] = useState<JobListItem[]>([]);
+  const [queues, setQueues] = useState<QueueInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -74,8 +87,11 @@ export default function ProjectSidebar({
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    listJobs()
-      .then(setProjects)
+    Promise.all([listJobs(), listQueues()])
+      .then(([jobs, qs]) => {
+        setProjects(jobs);
+        setQueues(qs);
+      })
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }, []);
@@ -92,6 +108,20 @@ export default function ProjectSidebar({
       await deleteJob(id);
       setProjects((prev) => prev.filter((p) => p.id !== id));
       if (activeJobId === id) onNewProject();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleDeleteQueue = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!window.confirm(t("batchQueue.deleteConfirm"))) return;
+    setDeletingId(id);
+    try {
+      await deleteQueue(id);
+      setQueues((prev) => prev.filter((q) => q.id !== id));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -143,101 +173,178 @@ export default function ProjectSidebar({
           className="flex min-h-0 flex-1 flex-col"
           style={{ width: SIDEBAR_WIDTH }}
         >
-      <div className="shrink-0 border-b border-border px-4 py-4">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-            {t("projects.title")}
-          </h2>
-          <button
-            type="button"
-            onClick={toggle}
-            aria-expanded={open}
-            aria-label={t("projects.hide")}
-            title={t("projects.hide")}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 xl:hidden"
-          >
-            <IconChevron className="h-4 w-4 -rotate-90" />
-          </button>
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="mt-3 w-full justify-center"
-          onClick={onNewProject}
-        >
-          {t("projects.newProject")}
-        </Button>
-      </div>
+          {/* Sidebar header */}
+          <div className="shrink-0 border-b border-border px-4 py-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                {t("projects.title")}
+              </h2>
+              <button
+                type="button"
+                onClick={toggle}
+                aria-expanded={open}
+                aria-label={t("projects.hide")}
+                title={t("projects.hide")}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 xl:hidden"
+              >
+                <IconChevron className="h-4 w-4 -rotate-90" />
+              </button>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-3 w-full justify-center"
+              onClick={onNewProject}
+            >
+              {t("projects.newProject")}
+            </Button>
+          </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {loading && (
-          <p className="px-2 py-3 text-center text-xs text-zinc-500">{t("projects.loading")}</p>
-        )}
-        {error && (
-          <p className="px-2 py-2 text-xs text-red-400">{error}</p>
-        )}
-        {!loading && !error && projects.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs leading-relaxed text-zinc-600">
-            {t("projects.empty")}
-          </p>
-        )}
-        <ul className="space-y-1">
-          {projects.map((project) => {
-            const active = activeJobId === project.id;
-            return (
-              <li key={project.id}>
-                <div
-                  className={`group flex items-stretch rounded-lg transition ${
-                    active
-                      ? "bg-indigo-500/15 ring-1 ring-indigo-500/40"
-                      : "hover:bg-zinc-800/60"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onSelectProject(project.id)}
-                    className="min-w-0 flex-1 px-3 py-2.5 text-left"
-                  >
-                    <span
-                      className={`block truncate text-sm font-medium ${
-                        active ? "text-indigo-100" : "text-zinc-200"
-                      }`}
-                      title={project.label}
-                    >
-                      {project.label}
-                    </span>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <Badge variant={statusVariant(project.status)}>
-                        {projectStatusLabel(project.status)}
-                      </Badge>
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500">
-                        {project.mode === "dub" ? (
-                          <IconDub className="h-3 w-3" />
-                        ) : (
-                          <IconSubtitles className="h-3 w-3" />
-                        )}
-                        {project.mode === "dub" ? t("projects.dub") : t("projects.subtitle")}
-                      </span>
-                    </div>
-                    <p className="mt-1 truncate text-[10px] text-zinc-600">
-                      {formatDate(project.created_at)}
-                    </p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => handleDelete(e, project.id)}
-                    disabled={deletingId === project.id}
-                    className="shrink-0 self-start rounded px-2 py-2 text-sm text-zinc-600 opacity-0 transition hover:bg-zinc-700 hover:text-red-400 group-hover:opacity-100"
-                    title={t("projects.deleteTitle")}
-                  >
-                    {deletingId === project.id ? "…" : "×"}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            {loading && (
+              <p className="px-2 py-3 text-center text-xs text-zinc-500">{t("projects.loading")}</p>
+            )}
+            {error && (
+              <p className="px-2 py-2 text-xs text-red-400">{error}</p>
+            )}
+
+            {/* Single Jobs */}
+            {!loading && projects.length > 0 && (
+              <>
+                <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                  {t("projects.singleJobs")}
+                </p>
+                <ul className="space-y-1 mb-4">
+                  {projects.map((project) => {
+                    const active = activeJobId === project.id;
+                    return (
+                      <li key={project.id}>
+                        <div
+                          className={`group flex items-stretch rounded-lg transition ${
+                            active
+                              ? "bg-indigo-500/15 ring-1 ring-indigo-500/40"
+                              : "hover:bg-zinc-800/60"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => onSelectProject(project.id)}
+                            className="min-w-0 flex-1 px-3 py-2.5 text-left"
+                          >
+                            <span
+                              className={`block truncate text-sm font-medium ${
+                                active ? "text-indigo-100" : "text-zinc-200"
+                              }`}
+                              title={project.label}
+                            >
+                              {project.label}
+                            </span>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              <Badge variant={statusVariant(project.status)}>
+                                {projectStatusLabel(project.status)}
+                              </Badge>
+                              <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500">
+                                {project.mode === "dub" ? (
+                                  <IconDub className="h-3 w-3" />
+                                ) : (
+                                  <IconSubtitles className="h-3 w-3" />
+                                )}
+                                {project.mode === "dub" ? t("projects.dub") : t("projects.subtitle")}
+                              </span>
+                            </div>
+                            <p className="mt-1 truncate text-[10px] text-zinc-600">
+                              {formatDate(project.created_at)}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDelete(e, project.id)}
+                            disabled={deletingId === project.id}
+                            className="shrink-0 self-start rounded px-2 py-2 text-sm text-zinc-600 opacity-0 transition hover:bg-zinc-700 hover:text-red-400 group-hover:opacity-100"
+                            title={t("projects.deleteTitle")}
+                          >
+                            {deletingId === project.id ? "…" : "×"}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+
+            {!loading && projects.length === 0 && queues.length === 0 && (
+              <p className="px-2 py-6 text-center text-xs leading-relaxed text-zinc-600">
+                {t("projects.empty")}
+              </p>
+            )}
+
+            {/* Batch Queues */}
+            {!loading && queues.length > 0 && (
+              <>
+                <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                  {t("projects.batchQueues")}
+                </p>
+                <ul className="space-y-1">
+                  {queues.map((queue) => {
+                    const active = activeQueueId === queue.id;
+                    const label =
+                      queue.queue_type === "playlist"
+                        ? t("batchQueue.playlistLabel", { count: queue.total_items })
+                        : t("batchQueue.filesLabel", { count: queue.total_items });
+                    return (
+                      <li key={queue.id}>
+                        <div
+                          className={`group flex items-stretch rounded-lg transition ${
+                            active
+                              ? "bg-violet-500/15 ring-1 ring-violet-500/40"
+                              : "hover:bg-zinc-800/60"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => onSelectQueue?.(queue.id)}
+                            className="min-w-0 flex-1 px-3 py-2.5 text-left"
+                          >
+                            <span
+                              className={`flex items-center gap-1.5 truncate text-sm font-medium ${
+                                active ? "text-violet-100" : "text-zinc-200"
+                              }`}
+                            >
+                              <IconBatchQueue className="h-3.5 w-3.5 shrink-0 text-violet-400" />
+                              {label}
+                            </span>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              <Badge variant={queueStatusVariant(queue.status)}>
+                                {queue.status}
+                              </Badge>
+                              {queue.status === "processing" && (
+                                <span className="text-[10px] text-zinc-500">
+                                  {queue.current_index + 1}/{queue.total_items}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 truncate text-[10px] text-zinc-600">
+                              {formatDate(queue.created_at)}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteQueue(e, queue.id)}
+                            disabled={deletingId === queue.id}
+                            className="shrink-0 self-start rounded px-2 py-2 text-sm text-zinc-600 opacity-0 transition hover:bg-zinc-700 hover:text-red-400 group-hover:opacity-100"
+                            title={t("batchQueue.deleteTitle")}
+                          >
+                            {deletingId === queue.id ? "…" : "×"}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </div>
         </div>
       </aside>
     </div>

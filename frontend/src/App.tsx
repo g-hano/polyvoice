@@ -4,7 +4,6 @@ import {
   checkBackendHealth,
   createJob,
   ensureJobModels,
-  dubDownloadUrl,
   exportDownloadUrl,
   getCues,
   getJob,
@@ -22,16 +21,20 @@ import ProjectSidebar from "./components/ProjectSidebar";
 import { AdvancedSettingsToolbar } from "./components/AdvancedSettingsPanel";
 import ModelsModal from "./components/ModelsModal";
 import Player from "./components/Player";
+import BatchQueueForm from "./components/BatchQueueForm";
+import QueueView from "./components/QueueView";
 import Accordion from "./components/ui/Accordion";
 import SlidePanel from "./components/ui/SlidePanel";
 import SubtitleSettingsPanel from "./components/SubtitleSettingsPanel";
 import Button from "./components/ui/Button";
 import Alert from "./components/ui/Alert";
 import WorkflowStepper, { type Step } from "./components/ui/WorkflowStepper";
-import { IconDatabase, IconDownload, IconPlay, IconSettings } from "./components/ui/Icons";
+import { IconBatchQueue, IconDatabase, IconDownload, IconPlay, IconSettings } from "./components/ui/Icons";
 import type { Cue, CreateJobParams, JobFormSubmitParams, ProgressEvent } from "./types";
 import type { TFunction } from "i18next";
 import { jobConfigToCreateJobParams, parseSubtitleStyle } from "./utils/jobConfig";
+
+type PanelMode = "single" | "batch";
 
 function pipelineSteps(params: CreateJobParams | null): string[] {
   const steps = ["pending", "downloading"];
@@ -184,6 +187,8 @@ export default function App() {
   const [languages, setLanguages] = useState<Record<string, string>>({});
   const [fonts, setFonts] = useState<string[]>(["Arial", "Verdana", "Georgia"]);
   const [projectsRefreshToken, setProjectsRefreshToken] = useState(0);
+  const [panelMode, setPanelMode] = useState<PanelMode>("single");
+  const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const {
     settings: styleSettings,
@@ -207,6 +212,8 @@ export default function App() {
     setCues(null);
     setExportReady(false);
     setError(null);
+    setActiveQueueId(null);
+    setPanelMode("single");
   }, []);
 
   const handleSelectProject = useCallback(
@@ -216,6 +223,7 @@ export default function App() {
       setCues(null);
       setExportReady(false);
       setJobRepos([]);
+      setActiveQueueId(null);
       unsubRef.current?.();
       unsubRef.current = null;
 
@@ -247,6 +255,23 @@ export default function App() {
     [jobId, loadFromConfig, t]
   );
 
+  const handleSelectQueue = useCallback((id: string) => {
+    setActiveQueueId(id);
+    setJobId(null);
+    setJobParams(null);
+    setProgress(null);
+    setCues(null);
+    setExportReady(false);
+    setError(null);
+    unsubRef.current?.();
+    unsubRef.current = null;
+  }, []);
+
+  const handleQueueCreated = useCallback((queueId: string) => {
+    setActiveQueueId(queueId);
+    setProjectsRefreshToken((t) => t + 1);
+  }, []);
+
   const handleSubmit = useCallback(
     async (params: JobFormSubmitParams) => {
       setError(null);
@@ -254,6 +279,7 @@ export default function App() {
       setProgress(null);
       setExportReady(false);
       setJobRepos([]);
+      setActiveQueueId(null);
       const fullParams: CreateJobParams = { ...params, subtitleStyle: styleSettings };
       setJobParams(fullParams);
       try {
@@ -404,7 +430,7 @@ export default function App() {
           <Alert variant="warning" className="border-0 bg-transparent p-0">
             {t("app.backendUnreachable")}{" "}
             <code className="rounded bg-zinc-900 px-1.5 py-0.5 text-xs">
-              cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+              cd backend &amp;&amp; uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
             </code>
           </Alert>
         </div>
@@ -414,7 +440,9 @@ export default function App() {
       <div className="flex flex-1 flex-col xl:flex-row">
         <ProjectSidebar
           activeJobId={jobId}
+          activeQueueId={activeQueueId}
           onSelectProject={handleSelectProject}
+          onSelectQueue={handleSelectQueue}
           onNewProject={handleNewProject}
           refreshToken={projectsRefreshToken}
         />
@@ -422,140 +450,204 @@ export default function App() {
         {/* Left config panel */}
         <aside className="flex w-full shrink-0 flex-col border-b border-border bg-[var(--panel-bg)] lg:max-h-[calc(100vh-3.5rem)] xl:w-[380px] xl:border-b-0 xl:border-r 2xl:w-[400px]">
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="shrink-0 border-b border-border px-5 py-4">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                {t("app.newProject")}
-              </h2>
-              <p className="mt-1 text-sm text-zinc-400">{t("app.configureJob")}</p>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-              <JobForm />
-              <div className="mt-4 space-y-3">
-                {modelPrepMessage && <Alert variant="info">{modelPrepMessage}</Alert>}
-                {error && <Alert variant="error">{error}</Alert>}
+            {/* Tab switcher */}
+            <div className="shrink-0 border-b border-border">
+              <div className="flex">
+                <button
+                  type="button"
+                  onClick={() => setPanelMode("single")}
+                  className={`flex flex-1 items-center justify-center gap-2 px-4 py-3 text-xs font-semibold transition ${
+                    panelMode === "single"
+                      ? "border-b-2 border-indigo-500 text-indigo-400"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  <IconPlay className="h-3.5 w-3.5" />
+                  {t("batchQueue.tabSingle")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPanelMode("batch")}
+                  className={`flex flex-1 items-center justify-center gap-2 px-4 py-3 text-xs font-semibold transition ${
+                    panelMode === "batch"
+                      ? "border-b-2 border-violet-500 text-violet-400"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  <IconBatchQueue className="h-3.5 w-3.5" />
+                  {t("batchQueue.tabBatch")}
+                </button>
               </div>
             </div>
+
+            {panelMode === "single" ? (
+              <>
+                <div className="shrink-0 border-b border-border px-5 py-4">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                    {t("app.newProject")}
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-400">{t("app.configureJob")}</p>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                  <JobForm />
+                  <div className="mt-4 space-y-3">
+                    {modelPrepMessage && <Alert variant="info">{modelPrepMessage}</Alert>}
+                    {error && <Alert variant="error">{error}</Alert>}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="shrink-0 border-b border-border px-5 py-4">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                    {t("batchQueue.panelTitle")}
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    {t("batchQueue.panelDesc")}
+                  </p>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                  <BatchQueueForm onQueueCreated={handleQueueCreated} />
+                </div>
+              </>
+            )}
           </div>
         </aside>
 
-        {/* Workspace + optional appearance panel */}
+        {/* Workspace */}
         <div className="flex min-h-[50vh] min-w-0 flex-1 flex-col lg:min-h-0 lg:max-h-[calc(100vh-3.5rem)] xl:flex-row">
-          <div className="app-grid-bg flex min-w-0 flex-1 flex-col">
-            <div className="relative shrink-0 border-b border-border bg-[var(--panel-bg)]/80 px-5 py-4 backdrop-blur-sm">
-              <div className="flex items-center gap-4">
-                <WorkflowStepper current={currentStep} className="min-w-0 flex-1" />
-                {!cues && <AdvancedSettingsToolbar />}
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5">
-            {progress && progress.status !== "done" && progress.status !== "error" && (
-              <ProgressPanel progress={progress} params={jobParams} jobRepos={jobRepos} />
-            )}
-
-            {progress?.status === "error" && (
-              <Alert variant="error" className="mb-5">
-                {progress.message || t("app.pipelineFailed")}
-              </Alert>
-            )}
-
-            {progress?.status === "done" && !cues && (
-              <div className="flex flex-1 items-center justify-center py-20">
-                <div className="text-center">
-                  <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-                  <p className="text-sm text-zinc-400">{t("app.loadingPreview")}</p>
-                </div>
-              </div>
-            )}
-
-            {cues && jobId ? (
-              <div className="flex flex-1 flex-col gap-5">
-                <Player
-                  src={mediaUrl(jobId)}
-                  cues={cues}
-                  style={styleSettings}
-                  showSubtitles={!isDubJob}
-                />
-
-                {!isDubJob && (
-                  <div className="xl:hidden">
-                    <Accordion
-                      title={t("app.subtitleAppearance")}
-                      description={t("app.subtitleAppearanceDesc")}
-                      icon={<IconSettings className="h-4 w-4" />}
-                      defaultOpen={false}
-                    >
-                      <SubtitleSettingsPanel
-                        settings={styleSettings}
-                        fonts={fonts}
-                        onSourceChange={handleSourceStyleChange}
-                        onTargetChange={handleTargetStyleChange}
-                        onReset={handleStyleReset}
-                        sourceLabel={sourceLabel}
-                        targetLabel={targetLabel}
-                        embedded
-                      />
-                    </Accordion>
-                  </div>
-                )}
-
-                {/* Export / download toolbar */}
-                <div className="mt-auto rounded-xl border border-border bg-[var(--panel-bg)] p-4">
-                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                    Export
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="secondary"
-                      icon={<IconDownload />}
-                      onClick={handleExport}
-                      disabled={exporting}
-                    >
-                      {exporting
-                        ? isDubJob
-                          ? "Preparing…"
-                          : "Burning…"
-                        : isDubJob
-                          ? "Dubbed Video"
-                          : "Burned-in Video"}
-                    </Button>
-                    {exportReady && (
-                      <a
-                        href={exportDownloadUrl(jobId)}
-                        className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-500"
-                      >
-                        <IconDownload className="h-4 w-4" />
-                        Download MP4
-                      </a>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              !progress && !jobId && <EmptyWorkspace />
-            )}
-            </div>
-          </div>
-
-          {cues && !isDubJob && (
-            <SlidePanel
-              open={appearanceOpen}
-              onToggle={() => setAppearanceOpen((v) => !v)}
-              title={t("app.appearance")}
-              description={t("app.appearanceDesc")}
-              width={340}
-            >
-              <SubtitleSettingsPanel
-                settings={styleSettings}
-                fonts={fonts}
-                onSourceChange={handleSourceStyleChange}
-                onTargetChange={handleTargetStyleChange}
-                onReset={handleStyleReset}
-                sourceLabel={sourceLabel}
-                targetLabel={targetLabel}
-                embedded
+          {activeQueueId ? (
+            /* Queue View */
+            <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-5">
+              <QueueView
+                queueId={activeQueueId}
+                onBack={() => {
+                  setActiveQueueId(null);
+                  setProjectsRefreshToken((t) => t + 1);
+                }}
               />
-            </SlidePanel>
+            </div>
+          ) : (
+            /* Single Job View */
+            <>
+              <div className="app-grid-bg flex min-w-0 flex-1 flex-col">
+                <div className="relative shrink-0 border-b border-border bg-[var(--panel-bg)]/80 px-5 py-4 backdrop-blur-sm">
+                  <div className="flex items-center gap-4">
+                    <WorkflowStepper current={currentStep} className="min-w-0 flex-1" />
+                    {!cues && <AdvancedSettingsToolbar />}
+                  </div>
+                </div>
+
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5">
+                  {progress && progress.status !== "done" && progress.status !== "error" && (
+                    <ProgressPanel progress={progress} params={jobParams} jobRepos={jobRepos} />
+                  )}
+
+                  {progress?.status === "error" && (
+                    <Alert variant="error" className="mb-5">
+                      {progress.message || t("app.pipelineFailed")}
+                    </Alert>
+                  )}
+
+                  {progress?.status === "done" && !cues && (
+                    <div className="flex flex-1 items-center justify-center py-20">
+                      <div className="text-center">
+                        <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                        <p className="text-sm text-zinc-400">{t("app.loadingPreview")}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {cues && jobId ? (
+                    <div className="flex flex-1 flex-col gap-5">
+                      <Player
+                        src={mediaUrl(jobId)}
+                        cues={cues}
+                        style={styleSettings}
+                        showSubtitles={!isDubJob}
+                      />
+
+                      {!isDubJob && (
+                        <div className="xl:hidden">
+                          <Accordion
+                            title={t("app.subtitleAppearance")}
+                            description={t("app.subtitleAppearanceDesc")}
+                            icon={<IconSettings className="h-4 w-4" />}
+                            defaultOpen={false}
+                          >
+                            <SubtitleSettingsPanel
+                              settings={styleSettings}
+                              fonts={fonts}
+                              onSourceChange={handleSourceStyleChange}
+                              onTargetChange={handleTargetStyleChange}
+                              onReset={handleStyleReset}
+                              sourceLabel={sourceLabel}
+                              targetLabel={targetLabel}
+                              embedded
+                            />
+                          </Accordion>
+                        </div>
+                      )}
+
+                      {/* Export / download toolbar */}
+                      <div className="mt-auto rounded-xl border border-border bg-[var(--panel-bg)] p-4">
+                        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                          Export
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            icon={<IconDownload />}
+                            onClick={handleExport}
+                            disabled={exporting}
+                          >
+                            {exporting
+                              ? isDubJob
+                                ? "Preparing…"
+                                : "Burning…"
+                              : isDubJob
+                                ? "Dubbed Video"
+                                : "Burned-in Video"}
+                          </Button>
+                          {exportReady && (
+                            <a
+                              href={exportDownloadUrl(jobId)}
+                              className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-500"
+                            >
+                              <IconDownload className="h-4 w-4" />
+                              Download MP4
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    !progress && !jobId && <EmptyWorkspace />
+                  )}
+                </div>
+              </div>
+
+              {cues && !isDubJob && (
+                <SlidePanel
+                  open={appearanceOpen}
+                  onToggle={() => setAppearanceOpen((v) => !v)}
+                  title={t("app.appearance")}
+                  description={t("app.appearanceDesc")}
+                  width={340}
+                >
+                  <SubtitleSettingsPanel
+                    settings={styleSettings}
+                    fonts={fonts}
+                    onSourceChange={handleSourceStyleChange}
+                    onTargetChange={handleTargetStyleChange}
+                    onReset={handleStyleReset}
+                    sourceLabel={sourceLabel}
+                    targetLabel={targetLabel}
+                    embedded
+                  />
+                </SlidePanel>
+              )}
+            </>
           )}
         </div>
       </div>

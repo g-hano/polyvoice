@@ -201,7 +201,9 @@
     "deleteTitle": "Delete project",
     "running": "Running",
     "dub": "Dub",
-    "subtitle": "Subtitle"
+    "subtitle": "Subtitle",
+    "singleJobs": "Single Jobs",
+    "batchQueues": "Batch Queues"
   },
   "models": {
     "title": "Model Library",
@@ -246,5 +248,37 @@
       "voxcpm": "VoxCPM",
       "omnivoice": "OmniVoice"
     }
+  },
+  "batchQueue": {
+    "tabSingle": "Single Job",
+    "tabBatch": "Batch Queue",
+    "panelTitle": "Batch Queue",
+    "panelDesc": "Process multiple videos at once",
+    "playlistLabel": "Playlist ({{count}})",
+    "filesLabel": "{{count}} Files",
+    "deleteConfirm": "Delete this batch queue and all its files?",
+    "deleteTitle": "Delete queue",
+    "viewTitle": "Playlist Queue",
+    "viewTitleUpload": "Multi-Upload Queue",
+    "videosProcessed": "{{current}} / {{total}} videos processed",
+    "queueItems": "Queue Items",
+    "downloadZip": "Download ZIP Archive ({{count}} videos)",
+    "back": "Back",
+    "backToHome": "Back to Home",
+    "statusDone": "Done",
+    "statusFailed": "Failed",
+    "statusProcessing": "Processing",
+    "statusPending": "Pending",
+    "errorTitle": "Error",
+    "sourceTitle": "Batch Source",
+    "sourceDesc": "Choose playlist or multiple files",
+    "modePlaylist": "Playlist",
+    "modeFiles": "Multiple Files",
+    "submitPlaylist": "Process Playlist",
+    "submitFiles": "Process {{count}} File",
+    "submitFilesPlural": "Process {{count}} Files",
+    "submitting": "Creating Queue…",
+    "successMessage": "Queue created with {{count}} items. Queue ID: {{id}}",
+    "errorFallback": "Failed to create batch queue"
   }
 }

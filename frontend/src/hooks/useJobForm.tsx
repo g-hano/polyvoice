@@ -1,5 +1,18 @@
-import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { getAsrModels, getLanguages, getTranslationModels, getTtsModels } from "../api";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import {
+  getAsrModels,
+  getLanguages,
+  getTranslationModels,
+  getTtsModels,
+} from "../api";
 import type {
   AsrEngine,
   AsrModelOption,
@@ -21,7 +34,13 @@ export const TRANSLATION_BACKENDS = [
   { id: "translategemma" },
 ] as const;
 
-export const TTS_BACKEND_IDS: TtsBackend[] = ["qwen", "kokoro", "voxcpm", "omnivoice", "higgs"];
+export const TTS_BACKEND_IDS: TtsBackend[] = [
+  "qwen",
+  "kokoro",
+  "voxcpm",
+  "omnivoice",
+  "higgs",
+];
 
 export const LLM_PROVIDER_PRESETS = {
   lmstudio: {
@@ -47,12 +66,12 @@ function defaultVoiceMode(backend: TtsBackend, ttsModel?: string): VoiceMode {
 
 function qwenModelKind(
   ttsModel: string,
-  models: TtsModelsResponse["qwen_models"] | undefined
+  models: TtsModelsResponse["qwen_models"] | undefined,
 ): string | undefined {
   return models?.find((m) => m.repo_id === ttsModel)?.kind;
 }
 
-export type JobFormContextValue = ReturnType<typeof useJobFormState>;
+export type JobFormContextValue = ReturnType<typeof useJobFormStateInternal>;
 
 const JobFormContext = createContext<JobFormContextValue | null>(null);
 
@@ -65,8 +84,10 @@ export function JobFormProvider({
   busy: boolean;
   children: ReactNode;
 }) {
-  const value = useJobFormState(onSubmit, busy);
-  return <JobFormContext.Provider value={value}>{children}</JobFormContext.Provider>;
+  const value = useJobFormStateInternal(onSubmit, busy);
+  return (
+    <JobFormContext.Provider value={value}>{children}</JobFormContext.Provider>
+  );
 }
 
 export function useJobForm(): JobFormContextValue {
@@ -75,8 +96,25 @@ export function useJobForm(): JobFormContextValue {
   return ctx;
 }
 
-function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: boolean) {
-  const [languages, setLanguages] = useState<Record<string, string>>({ sv: "Swedish", en: "English" });
+/**
+ * Standalone hook for accessing job form state without context.
+ * Useful for batch queue forms that don't need the submit handler.
+ */
+export function useJobFormState(): Omit<
+  JobFormContextValue,
+  "submit" | "canSubmit" | "busy"
+> {
+  return useJobFormStateInternal(() => {}, false);
+}
+
+function useJobFormStateInternal(
+  onSubmit: (params: JobFormSubmitParams) => void,
+  busy: boolean,
+) {
+  const [languages, setLanguages] = useState<Record<string, string>>({
+    sv: "Swedish",
+    en: "English",
+  });
   const [nemotronByIso, setNemotronByIso] = useState<
     Record<string, { locale: string; tier: string | null }>
   >({});
@@ -90,32 +128,50 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
     { repo_id: "Qwen/Qwen3-ASR-1.7B", label: "Qwen3 ASR 1.7B" },
   ]);
   const [alignerModels, setAlignerModels] = useState<AsrModelOption[]>([
-    { repo_id: "Qwen/Qwen3-ForcedAligner-0.6B", label: "Qwen3 Forced Aligner 0.6B" },
+    {
+      repo_id: "Qwen/Qwen3-ForcedAligner-0.6B",
+      label: "Qwen3 Forced Aligner 0.6B",
+    },
   ]);
   const [asrModel, setAsrModel] = useState("Qwen/Qwen3-ASR-1.7B");
-  const [forcedAlignerModel, setForcedAlignerModel] = useState("Qwen/Qwen3-ForcedAligner-0.6B");
+  const [forcedAlignerModel, setForcedAlignerModel] = useState(
+    "Qwen/Qwen3-ForcedAligner-0.6B",
+  );
   const [asrEngine, setAsrEngine] = useState<AsrEngine>("qwen");
   const [whisperModels, setWhisperModels] = useState<AsrModelOption[]>([]);
   const [nemotronModels, setNemotronModels] = useState<AsrModelOption[]>([
-    { repo_id: "nvidia/nemotron-3.5-asr-streaming-0.6b", label: "Nemotron 3.5 ASR 0.6B" },
+    {
+      repo_id: "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      label: "Nemotron 3.5 ASR 0.6B",
+    },
   ]);
-  const [nemotronModel, setNemotronModel] = useState("nvidia/nemotron-3.5-asr-streaming-0.6b");
+  const [nemotronModel, setNemotronModel] = useState(
+    "nvidia/nemotron-3.5-asr-streaming-0.6b",
+  );
   const [whisperPreset, setWhisperPreset] = useState("openai/whisper-large-v3");
   const [whisperCustom, setWhisperCustom] = useState("");
   const [translatorBackend, setTranslatorBackend] = useState("hunyuan");
   const [nllbModels, setNllbModels] = useState<AsrModelOption[]>([]);
-  const [nllbModel, setNllbModel] = useState("facebook/nllb-200-distilled-600M");
+  const [nllbModel, setNllbModel] = useState(
+    "facebook/nllb-200-distilled-600M",
+  );
   const [hunyuanModels, setHunyuanModels] = useState<AsrModelOption[]>([]);
   const [hunyuanModel, setHunyuanModel] = useState("tencent/Hy-MT2-1.8B");
   const [translateBatchSize, setTranslateBatchSize] = useState(16);
   const [qcEnabled, setQcEnabled] = useState(false);
   const [llmProvider, setLlmProvider] = useState<LlmProvider>("lmstudio");
-  const [llmBaseUrl, setLlmBaseUrl] = useState<string>(LLM_PROVIDER_PRESETS.lmstudio.url);
-  const [llmModel, setLlmModel] = useState<string>(LLM_PROVIDER_PRESETS.lmstudio.model);
+  const [llmBaseUrl, setLlmBaseUrl] = useState<string>(
+    LLM_PROVIDER_PRESETS.lmstudio.url,
+  );
+  const [llmModel, setLlmModel] = useState<string>(
+    LLM_PROVIDER_PRESETS.lmstudio.model,
+  );
 
   const [ttsMeta, setTtsMeta] = useState<TtsModelsResponse | null>(null);
   const [ttsBackend, setTtsBackend] = useState<TtsBackend>("qwen");
-  const [ttsModel, setTtsModel] = useState("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice");
+  const [ttsModel, setTtsModel] = useState(
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  );
   const [voiceMode, setVoiceMode] = useState<VoiceMode>("preset");
   const [voiceId, setVoiceId] = useState("Ryan");
   const [voiceDesignInstruct, setVoiceDesignInstruct] = useState("");
@@ -146,7 +202,8 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
         setAsrModels(data.asr_models);
         setAlignerModels(data.forced_aligner_models);
         if (data.whisper_models?.length) setWhisperModels(data.whisper_models);
-        if (data.nemotron_models?.length) setNemotronModels(data.nemotron_models);
+        if (data.nemotron_models?.length)
+          setNemotronModels(data.nemotron_models);
       })
       .catch(() => undefined);
     getTranslationModels()
@@ -162,10 +219,11 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
 
   const backendInfo: TtsBackendInfo | undefined = useMemo(
     () => ttsMeta?.backends.find((b) => b.id === ttsBackend),
-    [ttsMeta, ttsBackend]
+    [ttsMeta, ttsBackend],
   );
 
-  const isVoiceDesign = ttsBackend === "qwen" && ttsModel.includes("VoiceDesign");
+  const isVoiceDesign =
+    ttsBackend === "qwen" && ttsModel.includes("VoiceDesign");
   const qwenKind = qwenModelKind(ttsModel, ttsMeta?.qwen_models);
   const isVoiceClone = ttsBackend === "qwen" && qwenKind === "voice_clone";
   const showCloneUi = Boolean(backendInfo?.supports_clone || isVoiceClone);
@@ -182,7 +240,9 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
   const handleTtsBackendChange = (backend: TtsBackend) => {
     setTtsBackend(backend);
     const nextModel =
-      backend === "qwen" && ttsMeta?.qwen_models[0] ? ttsMeta.qwen_models[0].repo_id : ttsModel;
+      backend === "qwen" && ttsMeta?.qwen_models[0]
+        ? ttsMeta.qwen_models[0].repo_id
+        : ttsModel;
     if (backend === "qwen" && ttsMeta?.qwen_models[0]) {
       setTtsModel(ttsMeta.qwen_models[0].repo_id);
     }
@@ -219,8 +279,12 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
       asrEngine,
       asrModel,
       forcedAlignerModel,
-      whisperModel: asrEngine === "whisper" ? whisperModel : "openai/whisper-large-v3",
-      nemotronModel: asrEngine === "nemotron" ? nemotronModel : "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      whisperModel:
+        asrEngine === "whisper" ? whisperModel : "openai/whisper-large-v3",
+      nemotronModel:
+        asrEngine === "nemotron"
+          ? nemotronModel
+          : "nvidia/nemotron-3.5-asr-streaming-0.6b",
       translatorBackend,
       nllbModel,
       hunyuanModel,
@@ -248,19 +312,22 @@ function useJobFormState(onSubmit: (params: JobFormSubmitParams) => void, busy: 
 
   const hasSource = mode === "url" ? sourceUrl.trim().length > 0 : !!file;
   const whisperValid = asrEngine !== "whisper" || whisperModel.length > 0;
-  const uploadNeedsRefText = voiceMode === "clone_upload" && !voiceCloneXVectorOnly;
+  const uploadNeedsRefText =
+    voiceMode === "clone_upload" && !voiceCloneXVectorOnly;
   const dubValid =
     jobMode === "subtitle" ||
     ((!isVoiceDesign || voiceDesignInstruct.trim().length > 0) &&
       (voiceMode !== "clone_upload" ||
-        (!!refAudioFile && (!uploadNeedsRefText || refText.trim().length > 0))) &&
+        (!!refAudioFile &&
+          (!uploadNeedsRefText || refText.trim().length > 0))) &&
       (!isVoiceClone || voiceMode === "clone_video" || voiceCloneXVectorOnly));
   const canSubmit = hasSource && whisperValid && dubValid;
 
-  const nemotronInfo = asrEngine === "nemotron" ? nemotronByIso[sourceLang] : null;
+  const nemotronInfo =
+    asrEngine === "nemotron" ? nemotronByIso[sourceLang] : null;
 
   const sortedLanguages = Object.entries(languages).sort(([, a], [, b]) =>
-    a.localeCompare(b, undefined, { sensitivity: "base" })
+    a.localeCompare(b, undefined, { sensitivity: "base" }),
   );
 
   return {

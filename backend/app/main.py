@@ -1,5 +1,5 @@
 """FastAPI application exposing the PolyVoice pipeline."""
-from __future__ import annotations
+
 
 import asyncio
 import json
@@ -8,9 +8,18 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -30,15 +39,16 @@ from .config import (
     WHISPER_MODELS,
     PipelineConfig,
     SubtitleStyleConfig,
+    is_qwen_voice_clone_model,
     nemotron_locale,
     nemotron_tier,
     settings,
-    is_qwen_voice_clone_model,
 )
 from .jobs import manager
 from .logging_config import setup_logging, suppress_hf_progress_bars
 from .model_downloads import download_manager, repos_for_job
 from .model_paths import configure_hf_cache
+from .queue_manager import queue_manager
 
 setup_logging()
 configure_hf_cache()
@@ -79,6 +89,7 @@ async def log_requests(request: Request, call_next):
 async def _startup() -> None:
     manager.bind_loop(asyncio.get_running_loop())
     download_manager.bind_loop(asyncio.get_running_loop())
+    queue_manager.bind_loop(asyncio.get_running_loop())
     logger.info("PolyVoice API ready")
 
 
@@ -349,16 +360,24 @@ async def create_job(
 
     if job_mode == "dub" and voice_mode == "clone_upload":
         if ref_audio is None:
-            raise HTTPException(400, "ref_audio is required for uploaded voice cloning.")
+            raise HTTPException(
+                400, "ref_audio is required for uploaded voice cloning."
+            )
         ref_text_optional = (
             tts_backend == "qwen"
             and is_qwen_voice_clone_model(tts_model)
             and voice_clone_x_vector_only
         )
         if not ref_text_optional and not ref_text.strip():
-            raise HTTPException(400, "ref_text is required when uploading reference audio.")
+            raise HTTPException(
+                400, "ref_text is required when uploading reference audio."
+            )
 
-    if job_mode == "dub" and tts_backend == "qwen" and is_qwen_voice_clone_model(tts_model):
+    if (
+        job_mode == "dub"
+        and tts_backend == "qwen"
+        and is_qwen_voice_clone_model(tts_model)
+    ):
         if voice_mode not in ("clone_video", "clone_upload"):
             raise HTTPException(
                 400,
@@ -367,7 +386,9 @@ async def create_job(
 
     if job_mode == "dub" and tts_backend == "qwen" and "VoiceDesign" in tts_model:
         if not voice_design_instruct.strip():
-            raise HTTPException(400, "voice_design_instruct is required for Qwen VoiceDesign.")
+            raise HTTPException(
+                400, "voice_design_instruct is required for Qwen VoiceDesign."
+            )
 
     logger.info(
         "Creating job: source_url=%s file=%s lang=%s->%s mode=%s engine=%s asr=%s",
@@ -419,18 +440,27 @@ async def create_job(
     ref_audio_path: Optional[Path] = None
     if file is not None:
         upload_name = file.filename
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "").suffix)
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=Path(file.filename or "").suffix
+        )
         with tmp:
             shutil.copyfileobj(file.file, tmp)
         upload_path = Path(tmp.name)
 
     if ref_audio is not None:
-        tmp_ref = tempfile.NamedTemporaryFile(delete=False, suffix=Path(ref_audio.filename or ".wav").suffix)
+        tmp_ref = tempfile.NamedTemporaryFile(
+            delete=False, suffix=Path(ref_audio.filename or ".wav").suffix
+        )
         with tmp_ref:
             shutil.copyfileobj(ref_audio.file, tmp_ref)
         ref_audio_path = Path(tmp_ref.name)
 
-    manager.start(job, upload_path=upload_path, upload_name=upload_name, ref_audio_path=ref_audio_path)
+    manager.start(
+        job,
+        upload_path=upload_path,
+        upload_name=upload_name,
+        ref_audio_path=ref_audio_path,
+    )
     logger.info("Job %s started (status=%s)", job.id, job.status.value)
     return {"job_id": job.id, "status": job.status.value}
 
@@ -569,3 +599,291 @@ async def progress_ws(websocket: WebSocket, job_id: str) -> None:
         pass
     finally:
         manager.unsubscribe(job_id, queue)
+
+
+# ============================================================================
+# QUEUE ENDPOINTS (Playlist & Multi-Upload)
+# ============================================================================
+
+
+@app.post("/api/queues/playlist")
+async def create_playlist_queue(
+    playlist_url: str = Form(...),
+    source_lang: str = Form("sv"),
+    target_lang: str = Form("en"),
+    job_mode: str = Form("subtitle"),
+    asr_engine: str = Form("qwen"),
+    asr_model: str = Form("Qwen/Qwen3-ASR-1.7B"),
+    forced_aligner_model: str = Form("Qwen/Qwen3-ForcedAligner-0.6B"),
+    whisper_model: str = Form("openai/whisper-large-v3"),
+    nemotron_model: str = Form("nvidia/nemotron-3.5-asr-streaming-0.6b"),
+    translator_backend: str = Form("hunyuan"),
+    nllb_model: str = Form("facebook/nllb-200-distilled-600M"),
+    hunyuan_model: str = Form("tencent/Hy-MT2-1.8B"),
+    translate_batch_size: int = Form(16),
+    qc_enabled: bool = Form(False),
+    llm_provider: str = Form("lmstudio"),
+    llm_base_url: Optional[str] = Form(None),
+    llm_model: Optional[str] = Form(None),
+    lmstudio_url: str = Form("http://localhost:1234/v1"),
+    lmstudio_model: str = Form("local-model"),
+    subtitle_style: Optional[str] = Form(None),
+    tts_backend: str = Form("qwen"),
+    tts_model: str = Form("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+    voice_mode: str = Form("preset"),
+    voice_id: str = Form("Ryan"),
+    voice_design_instruct: str = Form(""),
+    voice_instruct: str = Form(""),
+    ref_text: str = Form(""),
+    voice_clone_x_vector_only: bool = Form(False),
+    higgs_server_url: str = Form("http://localhost:8000"),
+    keep_background: bool = Form(True),
+    background_mix_level: float = Form(0.85),
+    ref_audio: Optional[UploadFile] = File(None),
+) -> dict:
+    """Create a queue for processing a YouTube playlist."""
+    logger.info("Creating playlist queue: %s", playlist_url)
+
+    config = PipelineConfig(
+        source_lang=source_lang,
+        target_lang=target_lang,
+        job_mode=job_mode,  # type: ignore[arg-type]
+        asr_engine=asr_engine,  # type: ignore[arg-type]
+        asr_model=asr_model,
+        forced_aligner_model=forced_aligner_model,
+        whisper_model=whisper_model,
+        nemotron_model=nemotron_model,
+        translator_backend=translator_backend,  # type: ignore[arg-type]
+        nllb_model=nllb_model,
+        hunyuan_model=hunyuan_model,
+        translate_batch_size=translate_batch_size,
+        qc_enabled=qc_enabled,
+        llm_provider=llm_provider,  # type: ignore[arg-type]
+        llm_base_url=llm_base_url or lmstudio_url,
+        llm_model=llm_model or lmstudio_model,
+        lmstudio_url=llm_base_url or lmstudio_url,
+        lmstudio_model=llm_model or lmstudio_model,
+        subtitle_style=_parse_subtitle_style(subtitle_style),
+        tts_backend=tts_backend,  # type: ignore[arg-type]
+        tts_model=tts_model,
+        voice_mode=voice_mode,  # type: ignore[arg-type]
+        voice_id=voice_id,
+        voice_design_instruct=voice_design_instruct,
+        voice_instruct=voice_instruct,
+        ref_text=ref_text,
+        voice_clone_x_vector_only=voice_clone_x_vector_only,
+        higgs_server_url=higgs_server_url,
+        keep_background=keep_background,
+        background_mix_level=background_mix_level,
+    )
+
+    ref_audio_path: Optional[Path] = None
+    if ref_audio is not None:
+        tmp_ref = tempfile.NamedTemporaryFile(
+            delete=False, suffix=Path(ref_audio.filename or ".wav").suffix
+        )
+        with tmp_ref:
+            shutil.copyfileobj(ref_audio.file, tmp_ref)
+        ref_audio_path = Path(tmp_ref.name)
+
+    try:
+        queue = queue_manager.create_playlist_queue(
+            playlist_url=playlist_url,
+            config=config,
+            ref_audio_path=ref_audio_path,
+        )
+        queue_manager.start(queue)
+        logger.info(
+            "Playlist queue %s started with %d videos", queue.id, len(queue.items)
+        )
+        return {
+            "queue_id": queue.id,
+            "status": queue.status,
+            "total_items": len(queue.items),
+        }
+    except Exception as exc:
+        logger.exception("Failed to create playlist queue")
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/queues/multi-upload")
+async def create_multi_upload_queue(
+    files: List[UploadFile] = File(...),
+    source_lang: str = Form("sv"),
+    target_lang: str = Form("en"),
+    job_mode: str = Form("subtitle"),
+    asr_engine: str = Form("qwen"),
+    asr_model: str = Form("Qwen/Qwen3-ASR-1.7B"),
+    forced_aligner_model: str = Form("Qwen/Qwen3-ForcedAligner-0.6B"),
+    whisper_model: str = Form("openai/whisper-large-v3"),
+    nemotron_model: str = Form("nvidia/nemotron-3.5-asr-streaming-0.6b"),
+    translator_backend: str = Form("hunyuan"),
+    nllb_model: str = Form("facebook/nllb-200-distilled-600M"),
+    hunyuan_model: str = Form("tencent/Hy-MT2-1.8B"),
+    translate_batch_size: int = Form(16),
+    qc_enabled: bool = Form(False),
+    llm_provider: str = Form("lmstudio"),
+    llm_base_url: Optional[str] = Form(None),
+    llm_model: Optional[str] = Form(None),
+    lmstudio_url: str = Form("http://localhost:1234/v1"),
+    lmstudio_model: str = Form("local-model"),
+    subtitle_style: Optional[str] = Form(None),
+    tts_backend: str = Form("qwen"),
+    tts_model: str = Form("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+    voice_mode: str = Form("preset"),
+    voice_id: str = Form("Ryan"),
+    voice_design_instruct: str = Form(""),
+    voice_instruct: str = Form(""),
+    ref_text: str = Form(""),
+    voice_clone_x_vector_only: bool = Form(False),
+    higgs_server_url: str = Form("http://localhost:8000"),
+    keep_background: bool = Form(True),
+    background_mix_level: float = Form(0.85),
+    ref_audio: Optional[UploadFile] = File(None),
+) -> dict:
+    """Create a queue for processing multiple uploaded files."""
+    if not files:
+        raise HTTPException(400, "No files provided")
+
+    logger.info("Creating multi-upload queue with %d files", len(files))
+
+    config = PipelineConfig(
+        source_lang=source_lang,
+        target_lang=target_lang,
+        job_mode=job_mode,  # type: ignore[arg-type]
+        asr_engine=asr_engine,  # type: ignore[arg-type]
+        asr_model=asr_model,
+        forced_aligner_model=forced_aligner_model,
+        whisper_model=whisper_model,
+        nemotron_model=nemotron_model,
+        translator_backend=translator_backend,  # type: ignore[arg-type]
+        nllb_model=nllb_model,
+        hunyuan_model=hunyuan_model,
+        translate_batch_size=translate_batch_size,
+        qc_enabled=qc_enabled,
+        llm_provider=llm_provider,  # type: ignore[arg-type]
+        llm_base_url=llm_base_url or lmstudio_url,
+        llm_model=llm_model or lmstudio_model,
+        lmstudio_url=llm_base_url or lmstudio_url,
+        lmstudio_model=llm_model or lmstudio_model,
+        subtitle_style=_parse_subtitle_style(subtitle_style),
+        tts_backend=tts_backend,  # type: ignore[arg-type]
+        tts_model=tts_model,
+        voice_mode=voice_mode,  # type: ignore[arg-type]
+        voice_id=voice_id,
+        voice_design_instruct=voice_design_instruct,
+        voice_instruct=voice_instruct,
+        ref_text=ref_text,
+        voice_clone_x_vector_only=voice_clone_x_vector_only,
+        higgs_server_url=higgs_server_url,
+        keep_background=keep_background,
+        background_mix_level=background_mix_level,
+    )
+
+    # Save uploaded files to temporary locations
+    file_paths: List[tuple[Path, str]] = []
+    for file in files:
+        filename = file.filename or "upload.mp4"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix)
+        with tmp:
+            shutil.copyfileobj(file.file, tmp)
+        file_paths.append((Path(tmp.name), filename))
+
+    ref_audio_path: Optional[Path] = None
+    if ref_audio is not None:
+        tmp_ref = tempfile.NamedTemporaryFile(
+            delete=False, suffix=Path(ref_audio.filename or ".wav").suffix
+        )
+        with tmp_ref:
+            shutil.copyfileobj(ref_audio.file, tmp_ref)
+        ref_audio_path = Path(tmp_ref.name)
+
+    try:
+        queue = queue_manager.create_multi_upload_queue(
+            files=file_paths,
+            config=config,
+            ref_audio_path=ref_audio_path,
+        )
+        queue_manager.start(queue)
+        logger.info(
+            "Multi-upload queue %s started with %d files", queue.id, len(queue.items)
+        )
+        return {
+            "queue_id": queue.id,
+            "status": queue.status,
+            "total_items": len(queue.items),
+        }
+    except Exception as exc:
+        logger.exception("Failed to create multi-upload queue")
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/queues")
+def list_queues() -> dict:
+    """List all batch processing queues."""
+    return {"queues": queue_manager.list_queues()}
+
+
+@app.get("/api/queues/{queue_id}")
+def get_queue(queue_id: str) -> dict:
+    """Get details about a specific queue."""
+    queue = queue_manager.get_queue(queue_id)
+    if not queue:
+        raise HTTPException(404, "Queue not found")
+    return queue.to_dict()
+
+
+@app.delete("/api/queues/{queue_id}")
+def delete_queue(queue_id: str) -> dict:
+    """Delete a queue and all its jobs."""
+    if not queue_manager.delete_queue(queue_id):
+        raise HTTPException(404, "Queue not found")
+    return {"deleted": True, "queue_id": queue_id}
+
+
+@app.get("/api/queues/{queue_id}/download")
+def download_queue_zip(queue_id: str):
+    """Download the ZIP archive for a completed queue."""
+    queue = queue_manager.get_queue(queue_id)
+    if not queue or not queue.zip_filename:
+        raise HTTPException(404, "Queue ZIP not available")
+
+    zip_path = queue_manager.queue_dir(queue_id) / queue.zip_filename
+    if not zip_path.exists():
+        raise HTTPException(404, "ZIP file not found")
+
+    return FileResponse(zip_path, filename=f"queue_{queue_id}.zip")
+
+
+@app.websocket("/api/queues/{queue_id}/progress")
+async def queue_progress_ws(websocket: WebSocket, queue_id: str) -> None:
+    """WebSocket endpoint for queue progress updates."""
+    await websocket.accept()
+    queue = queue_manager.get_queue(queue_id)
+    if not queue:
+        await websocket.close(code=1008)
+        return
+
+    q = queue_manager.subscribe(queue_id)
+    try:
+        # Send current state
+        await websocket.send_json(
+            {
+                "queue_id": queue.id,
+                "status": queue.status,
+                "progress": queue.progress,
+                "message": queue.message,
+                "current_index": queue.current_index,
+                "total_items": len(queue.items),
+            }
+        )
+        # Stream updates
+        while True:
+            payload = await q.get()
+            await websocket.send_json(payload)
+            if payload["status"] in ("done", "error"):
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        queue_manager.unsubscribe(queue_id, q)

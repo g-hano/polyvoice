@@ -201,7 +201,9 @@
     "deleteTitle": "Projeyi sil",
     "running": "Çalışıyor",
     "dub": "Dublaj",
-    "subtitle": "Altyazı"
+    "subtitle": "Altyazı",
+    "singleJobs": "Tekil İşler",
+    "batchQueues": "Toplu Kuyruklar"
   },
   "models": {
     "title": "Model Kütüphanesi",
@@ -246,5 +248,37 @@
       "voxcpm": "VoxCPM",
       "omnivoice": "OmniVoice"
     }
+  },
+  "batchQueue": {
+    "tabSingle": "Tekil İş",
+    "tabBatch": "Toplu Kuyruk",
+    "panelTitle": "Toplu Kuyruk",
+    "panelDesc": "Birden fazla videoyu aynı anda işle",
+    "playlistLabel": "Oynatma Listesi ({{count}})",
+    "filesLabel": "{{count}} Dosya",
+    "deleteConfirm": "Bu toplu kuyruk ve tüm dosyaları silinsin mi?",
+    "deleteTitle": "Kuyruğu sil",
+    "viewTitle": "Oynatma Listesi Kuyruğu",
+    "viewTitleUpload": "Çoklu Yükleme Kuyruğu",
+    "videosProcessed": "{{current}} / {{total}} video işlendi",
+    "queueItems": "Kuyruk Öğeleri",
+    "downloadZip": "ZIP Arşivini İndir ({{count}} video)",
+    "back": "Geri",
+    "backToHome": "Ana Sayfaya Dön",
+    "statusDone": "Tamamlandı",
+    "statusFailed": "Başarısız",
+    "statusProcessing": "İşleniyor",
+    "statusPending": "Bekliyor",
+    "errorTitle": "Hata",
+    "sourceTitle": "Toplu Kaynak",
+    "sourceDesc": "Oynatma listesi veya birden fazla dosya seçin",
+    "modePlaylist": "Oynatma Listesi",
+    "modeFiles": "Birden Fazla Dosya",
+    "submitPlaylist": "Oynatma Listesini İşle",
+    "submitFiles": "{{count}} Dosyayı İşle",
+    "submitFilesPlural": "{{count}} Dosyayı İşle",
+    "submitting": "Kuyruk Oluşturuluyor…",
+    "successMessage": "{{count}} öğeli kuyruk oluşturuldu. Kuyruk Kimliği: {{id}}",
+    "errorFallback": "Toplu kuyruk oluşturulamadı"
   }
 }

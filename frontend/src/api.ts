@@ -34,7 +34,7 @@ async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
     return await fetch(input, init);
   } catch {
     throw new Error(
-      "Could not reach the backend. Run: cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      "Could not reach the backend. Run: cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000",
     );
   }
 }
@@ -57,7 +57,7 @@ export interface EnsureJobModelsResult {
 }
 
 export async function ensureJobModels(
-  params: CreateJobParams
+  params: CreateJobParams,
 ): Promise<EnsureJobModelsResult> {
   const res = await apiFetch(`${API}/models/ensure-for-job`, {
     method: "POST",
@@ -107,7 +107,10 @@ export function waitForModelDownloads(modelIds: string[]): Promise<void> {
           if (pending.size === 0) finish();
         } else if (event.status === "error") {
           finish(
-            new Error(event.error?.split("\n")[0] ?? `Download failed: ${event.model_id}`)
+            new Error(
+              event.error?.split("\n")[0] ??
+                `Download failed: ${event.model_id}`,
+            ),
           );
         }
       });
@@ -116,7 +119,9 @@ export function waitForModelDownloads(modelIds: string[]): Promise<void> {
   });
 }
 
-export async function createJob(params: CreateJobParams): Promise<{ job_id: string }> {
+export async function createJob(
+  params: CreateJobParams,
+): Promise<{ job_id: string }> {
   const form = new FormData();
   if (params.sourceUrl) form.append("source_url", params.sourceUrl);
   if (params.file) form.append("file", params.file);
@@ -146,7 +151,10 @@ export async function createJob(params: CreateJobParams): Promise<{ job_id: stri
   form.append("voice_design_instruct", params.voiceDesignInstruct);
   form.append("voice_instruct", params.voiceInstruct);
   form.append("ref_text", params.refText);
-  form.append("voice_clone_x_vector_only", params.voiceCloneXVectorOnly ? "true" : "false");
+  form.append(
+    "voice_clone_x_vector_only",
+    params.voiceCloneXVectorOnly ? "true" : "false",
+  );
   form.append("higgs_server_url", params.higgsServerUrl);
   form.append("keep_background", params.keepBackground ? "true" : "false");
   form.append("background_mix_level", String(params.backgroundMixLevel));
@@ -164,7 +172,10 @@ export async function listJobs(): Promise<JobListItem[]> {
   return data.jobs ?? [];
 }
 
-export async function getJob(jobId: string, includeCues = false): Promise<JobInfo> {
+export async function getJob(
+  jobId: string,
+  includeCues = false,
+): Promise<JobInfo> {
   const query = includeCues ? "?include_cues=true" : "";
   const res = await apiFetch(`${API}/jobs/${jobId}${query}`);
   if (!res.ok) throw new Error("Job not found");
@@ -247,7 +258,7 @@ export async function setHfToken(token: string | null): Promise<HfAuthStatus> {
 export async function requestExport(
   jobId: string,
   subtitleStyle?: SubtitleStyleSettings,
-  includeSubtitles = false
+  includeSubtitles = false,
 ): Promise<{ export_filename: string }> {
   const res = await apiFetch(`${API}/jobs/${jobId}/export`, {
     method: "POST",
@@ -271,10 +282,12 @@ export function dubDownloadUrl(jobId: string): string {
 
 export function subscribeProgress(
   jobId: string,
-  onEvent: (e: ProgressEvent) => void
+  onEvent: (e: ProgressEvent) => void,
 ): () => void {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${window.location.host}${API}/jobs/${jobId}/progress`);
+  const ws = new WebSocket(
+    `${proto}://${window.location.host}${API}/jobs/${jobId}/progress`,
+  );
   ws.onmessage = (msg) => {
     try {
       onEvent(JSON.parse(msg.data));
@@ -293,7 +306,9 @@ export async function getModels(): Promise<ModelInfo[]> {
 }
 
 export async function downloadModel(modelId: string): Promise<void> {
-  const res = await apiFetch(`${API}/models/${modelId}/download`, { method: "POST" });
+  const res = await apiFetch(`${API}/models/${modelId}/download`, {
+    method: "POST",
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? "Download failed to start");
@@ -301,7 +316,9 @@ export async function downloadModel(modelId: string): Promise<void> {
 }
 
 export async function downloadRequiredModels(): Promise<string[]> {
-  const res = await apiFetch(`${API}/models/download-required`, { method: "POST" });
+  const res = await apiFetch(`${API}/models/download-required`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error("Failed to start required downloads");
   const data = await res.json();
   return data.started ?? [];
@@ -309,11 +326,11 @@ export async function downloadRequiredModels(): Promise<string[]> {
 
 export function subscribeModelProgress(
   modelId: string,
-  onEvent: (e: ModelProgressEvent) => void
+  onEvent: (e: ModelProgressEvent) => void,
 ): () => void {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(
-    `${proto}://${window.location.host}${API}/models/${modelId}/download/progress`
+    `${proto}://${window.location.host}${API}/models/${modelId}/download/progress`,
   );
   ws.onmessage = (msg) => {
     try {
@@ -322,6 +339,180 @@ export function subscribeModelProgress(
         ...raw,
         model_id: raw.model_id ?? raw.id ?? modelId,
       });
+    } catch {
+      /* ignore malformed */
+    }
+  };
+  return () => ws.close();
+}
+
+// ============================================================================
+// QUEUE API (Playlist & Multi-Upload)
+// ============================================================================
+
+export interface QueueProgressEvent {
+  queue_id: string;
+  status: string;
+  progress: number;
+  message: string;
+  current_index: number;
+  total_items: number;
+}
+
+export interface QueueItem {
+  title: string;
+  url?: string;
+  upload_name?: string;
+  job_id?: string;
+  status: string;
+  error?: string;
+}
+
+export interface QueueInfo {
+  id: string;
+  queue_type: string;
+  status: string;
+  progress: number;
+  message: string;
+  current_index: number;
+  total_items: number;
+  items: QueueItem[];
+  zip_filename?: string;
+  error?: string;
+  created_at: number;
+}
+
+export async function createPlaylistQueue(
+  playlistUrl: string,
+  params: CreateJobParams,
+): Promise<{ queue_id: string; status: string; total_items: number }> {
+  const form = new FormData();
+  form.append("playlist_url", playlistUrl);
+  form.append("source_lang", params.sourceLang);
+  form.append("target_lang", params.targetLang);
+  form.append("job_mode", params.jobMode);
+  form.append("asr_engine", params.asrEngine);
+  form.append("asr_model", params.asrModel);
+  form.append("forced_aligner_model", params.forcedAlignerModel);
+  form.append("whisper_model", params.whisperModel);
+  form.append("nemotron_model", params.nemotronModel);
+  form.append("translator_backend", params.translatorBackend);
+  form.append("nllb_model", params.nllbModel);
+  form.append("hunyuan_model", params.hunyuanModel);
+  form.append("translate_batch_size", String(params.translateBatchSize));
+  form.append("qc_enabled", params.qcEnabled ? "true" : "false");
+  form.append("llm_provider", params.llmProvider);
+  form.append("llm_base_url", params.llmBaseUrl);
+  form.append("llm_model", params.llmModel);
+  form.append("lmstudio_url", params.llmBaseUrl);
+  form.append("lmstudio_model", params.llmModel);
+  form.append("subtitle_style", JSON.stringify(params.subtitleStyle));
+  form.append("tts_backend", params.ttsBackend);
+  form.append("tts_model", params.ttsModel);
+  form.append("voice_mode", params.voiceMode);
+  form.append("voice_id", params.voiceId);
+  form.append("voice_design_instruct", params.voiceDesignInstruct);
+  form.append("voice_instruct", params.voiceInstruct);
+  form.append("ref_text", params.refText);
+  form.append(
+    "voice_clone_x_vector_only",
+    params.voiceCloneXVectorOnly ? "true" : "false",
+  );
+  form.append("higgs_server_url", params.higgsServerUrl);
+  form.append("keep_background", params.keepBackground ? "true" : "false");
+  form.append("background_mix_level", String(params.backgroundMixLevel));
+  if (params.refAudioFile) form.append("ref_audio", params.refAudioFile);
+
+  const res = await apiFetch(`${API}/queues/playlist`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function createMultiUploadQueue(
+  files: File[],
+  params: CreateJobParams,
+): Promise<{ queue_id: string; status: string; total_items: number }> {
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  form.append("source_lang", params.sourceLang);
+  form.append("target_lang", params.targetLang);
+  form.append("job_mode", params.jobMode);
+  form.append("asr_engine", params.asrEngine);
+  form.append("asr_model", params.asrModel);
+  form.append("forced_aligner_model", params.forcedAlignerModel);
+  form.append("whisper_model", params.whisperModel);
+  form.append("nemotron_model", params.nemotronModel);
+  form.append("translator_backend", params.translatorBackend);
+  form.append("nllb_model", params.nllbModel);
+  form.append("hunyuan_model", params.hunyuanModel);
+  form.append("translate_batch_size", String(params.translateBatchSize));
+  form.append("qc_enabled", params.qcEnabled ? "true" : "false");
+  form.append("llm_provider", params.llmProvider);
+  form.append("llm_base_url", params.llmBaseUrl);
+  form.append("llm_model", params.llmModel);
+  form.append("lmstudio_url", params.llmBaseUrl);
+  form.append("lmstudio_model", params.llmModel);
+  form.append("subtitle_style", JSON.stringify(params.subtitleStyle));
+  form.append("tts_backend", params.ttsBackend);
+  form.append("tts_model", params.ttsModel);
+  form.append("voice_mode", params.voiceMode);
+  form.append("voice_id", params.voiceId);
+  form.append("voice_design_instruct", params.voiceDesignInstruct);
+  form.append("voice_instruct", params.voiceInstruct);
+  form.append("ref_text", params.refText);
+  form.append(
+    "voice_clone_x_vector_only",
+    params.voiceCloneXVectorOnly ? "true" : "false",
+  );
+  form.append("higgs_server_url", params.higgsServerUrl);
+  form.append("keep_background", params.keepBackground ? "true" : "false");
+  form.append("background_mix_level", String(params.backgroundMixLevel));
+  if (params.refAudioFile) form.append("ref_audio", params.refAudioFile);
+
+  const res = await apiFetch(`${API}/queues/multi-upload`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function listQueues(): Promise<QueueInfo[]> {
+  const res = await apiFetch(`${API}/queues`);
+  if (!res.ok) throw new Error("Failed to load queues");
+  const data = await res.json();
+  return data.queues ?? [];
+}
+
+export async function getQueue(queueId: string): Promise<QueueInfo> {
+  const res = await apiFetch(`${API}/queues/${queueId}`);
+  if (!res.ok) throw new Error("Queue not found");
+  return res.json();
+}
+
+export async function deleteQueue(queueId: string): Promise<void> {
+  const res = await apiFetch(`${API}/queues/${queueId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readApiError(res));
+}
+
+export function queueDownloadUrl(queueId: string): string {
+  return `${API}/queues/${queueId}/download`;
+}
+
+export function subscribeQueueProgress(
+  queueId: string,
+  onEvent: (e: QueueProgressEvent) => void,
+): () => void {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(
+    `${proto}://${window.location.host}${API}/queues/${queueId}/progress`,
+  );
+  ws.onmessage = (msg) => {
+    try {
+      onEvent(JSON.parse(msg.data));
     } catch {
       /* ignore malformed */
     }
